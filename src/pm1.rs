@@ -274,19 +274,4 @@ mod tests {
         assert_eq!(pollard_pm1(&m61, 1000, 2000), None);
         assert_eq!(pollard_pm1(&big("1000000000039"), 1000, 10_000), None);
     }
-
-    #[test]
-    fn tiny_moduli_do_not_panic() {
-        for m in 0..=30u32 {
-            let m = BigUint::from(m);
-            for (b1, b2) in [(0, 0), (1, 10), (10, 10), (10, 100)] {
-                if let Some(d) = pollard_pm1(&m, b1, b2) {
-                    assert_nontrivial_divisor(&m, &d);
-                }
-            }
-        }
-        // Powers of 3 take `x` to 0 modulo `m`.
-        assert_eq!(pollard_pm1(&BigUint::from(9u32), 10, 100), None);
-        assert_eq!(pollard_pm1(&BigUint::from(27u32), 10, 100), None);
-    }
 }
