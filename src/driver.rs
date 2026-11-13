@@ -459,7 +459,7 @@ impl Driver {
 
     /// Runs every task in this thread with `run_task`, one at a time (for tests).
     pub fn run_to_completion(&mut self) -> Snapshot {
-        self.run_with(&mut |task| task::run_task(task, &mut |_| {}))
+        self.run_with(&mut |task| task::run_task(task, &mut |_| {}, &|| false))
     }
 
     /// Runs the driver to completion with `exec` running each task. The unit tests pass a fake

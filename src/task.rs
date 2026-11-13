@@ -146,8 +146,10 @@ pub struct TaskResult {
 }
 
 /// Runs one task. `progress(done)` is called after each ECM curve with the number of curves
-/// finished so far in this task; other tasks never call it.
-pub fn run_task(task: &Task, progress: &mut dyn FnMut(u32)) -> TaskResult {
+/// finished so far in this task; other tasks never call it. An ECM task polls `stop()` during its
+/// curves and ends with `NoFactor` once it is true, so it is set only for a task whose result is
+/// no longer wanted (`Driver::submit` returns their ids).
+pub fn run_task(task: &Task, progress: &mut dyn FnMut(u32), stop: &dyn Fn() -> bool) -> TaskResult {
     let outcome = match task {
         Task::Analyze { m, trial_bound, .. } => analyze(m, *trial_bound),
         Task::Rho { m, c, steps, .. } => factor_outcome(rho::pollard_rho(m, *c, *steps)),
@@ -159,7 +161,7 @@ pub fn run_task(task: &Task, progress: &mut dyn FnMut(u32)) -> TaskResult {
             sigma_start,
             curves,
             ..
-        } => run_ecm(m, *b1, *b2, *sigma_start, *curves, progress),
+        } => run_ecm(m, *b1, *b2, *sigma_start, *curves, progress, stop),
         Task::Root {
             q,
             factors,
@@ -229,7 +231,7 @@ fn factor_outcome(divisor: Option<BigUint>) -> Outcome {
     }
 }
 
-/// Runs the curves of an `Ecm` task, stopping at the first divisor.
+/// Runs the curves of an `Ecm` task, stopping at the first divisor or once `stop()` is true.
 fn run_ecm(
     m: &BigUint,
     b1: u64,
@@ -237,10 +239,14 @@ fn run_ecm(
     sigma_start: u64,
     curves: u32,
     progress: &mut dyn FnMut(u32),
+    stop: &dyn Fn() -> bool,
 ) -> Outcome {
     for i in 0..curves {
         let sigma = sigma_start.wrapping_add(u64::from(i));
-        let divisor = ecm::ecm_curve(m, sigma, b1, b2);
+        let divisor = ecm::ecm_curve(m, sigma, b1, b2, stop);
+        if divisor.is_none() && stop() {
+            break;
+        }
         progress(i + 1);
         if let Some(d) = divisor {
             return Outcome::Divisor { d };
@@ -315,7 +321,7 @@ mod tests {
 
     fn run(task: Task) -> Outcome {
         let mut calls = Vec::new();
-        let result = run_task(&task, &mut |done| calls.push(done));
+        let result = run_task(&task, &mut |done| calls.push(done), &|| false);
         assert_eq!(result.id, task.id());
         if !matches!(task, Task::Ecm { .. }) {
             assert!(calls.is_empty(), "progress called by {task:?}");
@@ -457,7 +463,7 @@ mod tests {
             sigma_start: 9,
             curves: 5,
         };
-        let result = run_task(&task, &mut |done| calls.push(done));
+        let result = run_task(&task, &mut |done| calls.push(done), &|| false);
         assert_eq!(result.id, 4);
         assert_eq!(
             result.outcome,
@@ -475,9 +481,35 @@ mod tests {
             sigma_start: 6,
             curves: 3,
         };
-        let result = run_task(&task, &mut |done| calls.push(done));
+        let result = run_task(&task, &mut |done| calls.push(done), &|| false);
         assert_eq!(result.outcome, Outcome::NoFactor);
         assert_eq!(calls, [1, 2, 3]);
+    }
+
+    #[test]
+    fn ecm_ends_with_no_factor_once_stop_is_true() {
+        // The task above, asked to stop after its first curve: the second, which finds the
+        // factor, ends at once.
+        let task = Task::Ecm {
+            id: 4,
+            m: big("314159265359") * big("27182818284590452387"),
+            b1: 2000,
+            b2: 200_000,
+            sigma_start: 9,
+            curves: 5,
+        };
+        let stopped = std::cell::Cell::new(false);
+        let mut calls = Vec::new();
+        let result = run_task(
+            &task,
+            &mut |done| {
+                calls.push(done);
+                stopped.set(true);
+            },
+            &|| stopped.get(),
+        );
+        assert_eq!(result.outcome, Outcome::NoFactor);
+        assert_eq!(calls, [1]);
     }
 
     fn root_task(q: &str, factors: &[u64], bound: u64, hint: Option<BigUint>) -> Task {
@@ -643,7 +675,7 @@ mod tests {
         );
         let back: Task = serde_json::from_str(&json).unwrap();
         assert_eq!(back, task);
-        let result = run_task(&back, &mut |_| panic!("no progress"));
+        let result = run_task(&back, &mut |_| panic!("no progress"), &|| false);
         assert_eq!(result.id, 9);
         assert_eq!(
             result.outcome,
@@ -708,7 +740,11 @@ mod tests {
             term: "1000003".to_string(),
         };
         let json = serde_json::to_string(&task).unwrap();
-        let result = run_task(&serde_json::from_str::<Task>(&json).unwrap(), &mut |_| {});
+        let result = run_task(
+            &serde_json::from_str::<Task>(&json).unwrap(),
+            &mut |_| {},
+            &|| false,
+        );
         assert_eq!(
             result.outcome,
             Outcome::VerifyFailed {

@@ -2,11 +2,12 @@
 //! the certificate (or the composite report, or the failure) to stdout.
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::io::{self, Write};
 use std::panic::{self, AssertUnwindSafe};
 use std::process::{self, ExitCode};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -143,13 +144,14 @@ fn parse_count(text: &str, option: &str) -> Result<usize, String> {
 /// from inside the loop, so this returns only when every worker stopped before the run finished.
 fn run(driver: Driver, args: &Args) -> Snapshot {
     let driver = Mutex::new(driver);
+    let running = Mutex::new(HashMap::new());
     let live_workers = AtomicUsize::new(args.threads);
     let start = Instant::now();
     thread::scope(|scope| {
         for _ in 0..args.threads {
             scope.spawn(|| {
                 let _live = LiveWorker(&live_workers);
-                worker_loop(&driver);
+                worker_loop(&driver, &running);
             });
         }
         let mut last_report: Option<Instant> = None;
@@ -195,21 +197,32 @@ impl Drop for LiveWorker<'_> {
 }
 
 /// Takes tasks one at a time until the run is finished. A panic in a task becomes an `Error`
-/// outcome, so the run never waits for a result that cannot arrive.
-fn worker_loop(driver: &Mutex<Driver>) {
+/// outcome, so the run never waits for a result that cannot arrive. `running` holds the stop flag
+/// of every task on a thread, by id, and a flag is set when `submit` returns its task as stale.
+fn worker_loop(driver: &Mutex<Driver>, running: &Mutex<HashMap<u32, Arc<AtomicBool>>>) {
     loop {
         let task = {
             let mut guard = lock(driver);
             if guard.is_finished() {
                 return;
             }
-            guard.take_tasks(1).pop()
+            // Registered under the driver's lock, so a task is in `running` before any `submit`
+            // can return it as stale.
+            guard.take_tasks(1).pop().map(|task| {
+                let stop = Arc::new(AtomicBool::new(false));
+                lock(running).insert(task.id(), Arc::clone(&stop));
+                (task, stop)
+            })
         };
         match task {
-            Some(task) => {
+            Some((task, stop)) => {
                 let id = task.id();
                 let result = panic::catch_unwind(AssertUnwindSafe(|| {
-                    run_task(&task, &mut |done| lock(driver).report_progress(id, done))
+                    run_task(
+                        &task,
+                        &mut |done| lock(driver).report_progress(id, done),
+                        &|| stop.load(Ordering::Relaxed),
+                    )
                 }))
                 .unwrap_or_else(|payload| TaskResult {
                     id,
@@ -217,7 +230,14 @@ fn worker_loop(driver: &Mutex<Driver>) {
                         message: format!("task {id} panicked: {}", panic_message(&*payload)),
                     },
                 });
-                lock(driver).submit(result);
+                let stale = lock(driver).submit(result);
+                let mut running = lock(running);
+                running.remove(&id);
+                for stale_id in stale {
+                    if let Some(stop) = running.get(&stale_id) {
+                        stop.store(true, Ordering::Relaxed);
+                    }
+                }
             }
             // Results of other threads are awaited.
             None => thread::sleep(Duration::from_millis(10)),
@@ -235,10 +255,10 @@ fn panic_message(payload: &(dyn Any + Send)) -> String {
     }
 }
 
-/// Locks the driver, recovering from poisoning: the final snapshot is still wanted after a
-/// worker panicked while holding the lock.
-fn lock(driver: &Mutex<Driver>) -> MutexGuard<'_, Driver> {
-    driver
+/// Locks the driver (or the stop flags), recovering from poisoning: the final snapshot is still
+/// wanted after a worker panicked while holding the lock.
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
