@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
   # Mathlib master changes without a push here.
   schedule:
-    - cron: '0 6 * * *'
+    - cron: '0 6 * * 1'
 
 permissions:
   contents: read
@@ -18,7 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # The daily run only checks the examples against the new Mathlib master.
+      # The weekly run only checks the examples against the new Mathlib master.
       - name: Test
         if: github.event_name != 'schedule'
         run: cargo test --locked
