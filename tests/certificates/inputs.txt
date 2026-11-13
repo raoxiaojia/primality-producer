@@ -1,0 +1,6 @@
+# One input per line, checked beside the gallery's entries (web/gallery.json).
+# Below 1024, the proof is `by primality` alone.
+1021
+2^127 - 1
+# An exponent above 256 needs `set_option exponentiation.threshold`.
+3 * 2^276 + 1
