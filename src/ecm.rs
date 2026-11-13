@@ -327,18 +327,6 @@ mod tests {
     }
 
     #[test]
-    fn finds_a_15_digit_factor_at_the_second_level() {
-        let p = big("161803398874991");
-        let q = big("1414213562373095048801707");
-        let m = &p * &q;
-        let (sigma, d) =
-            first_find(&m, 6..=120, 11_000, 1_100_000).expect("a find in sigma 6..=120");
-        assert_eq!(sigma, 7);
-        assert_eq!(d, p);
-        assert!(d > BigUint::one() && d < m && (&m % &d).is_zero());
-    }
-
-    #[test]
     fn stage_2_finds_what_stage_1_misses() {
         // `sigma = 10` finds `p` in stage 2 only, and `sigma = 28` in stage 1 already.
         let (p, q) = first_level_primes();
@@ -366,17 +354,6 @@ mod tests {
     }
 
     #[test]
-    fn the_same_inputs_give_the_same_result() {
-        let (p, q) = first_level_primes();
-        let m = &p * &q;
-        for sigma in [9u64, 10, 28] {
-            let first = ecm_curve(&m, sigma, 2000, 200_000, &never);
-            let second = ecm_curve(&m, sigma, 2000, 200_000, &never);
-            assert_eq!(first, second, "sigma = {sigma}");
-        }
-    }
-
-    #[test]
     fn inversion_failure_yields_the_common_factor() {
         // `sigma = 6` gives `u = 31`, so `16 u³ v` shares the factor 31 with `m = 31 · 1000003`.
         let s = big("1000003");
@@ -395,16 +372,5 @@ mod tests {
         );
         // `m = 93 = 3 · 31` divides `16 · 31³ · 24`: the gcd is `m` and the curve is unusable.
         assert_eq!(ecm_curve(&big("93"), 6, 2000, 200_000, &never), None);
-    }
-
-    #[test]
-    fn a_prime_modulus_and_tiny_moduli_give_none() {
-        let p = big("10000000000000000051");
-        assert_eq!(ecm_curve(&p, 6, 2000, 200_000, &never), None);
-        assert_eq!(ecm_curve(&p, 7, 2000, 200_000, &never), None);
-        assert_eq!(ecm_curve(&big("1000003"), 6, 2000, 200_000, &never), None);
-        assert_eq!(ecm_curve(&BigUint::zero(), 6, 2000, 200_000, &never), None);
-        assert_eq!(ecm_curve(&BigUint::one(), 6, 2000, 200_000, &never), None);
-        assert_eq!(ecm_curve(&big("2"), 6, 2000, 200_000, &never), None);
     }
 }

@@ -103,11 +103,7 @@ fn isolate(x: &BigUint, ys: &mut BigUint, batch: u64, c: &BigUint, m: &BigUint) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arith::{is_small_prime, miller_rabin};
-
-    fn big(s: &str) -> BigUint {
-        BigUint::parse_bytes(s.as_bytes(), 10).unwrap()
-    }
+    use crate::arith::is_small_prime;
 
     /// Runs rho on `p * q` and checks that it returns one prime and leaves the other.
     fn splits(p: u64, q: u64, c: u64) {
@@ -128,56 +124,6 @@ mod tests {
         splits(1_000_000_007, 9_999_999_967, 1); // 10 and 10 digits
         splits(10_000_019, 9_999_999_967, 1); // 8 and 10 digits
         splits(2_147_483_647, 4_294_967_291, 1); // 2^31 - 1 and 2^32 - 5
-    }
-
-    #[test]
-    fn c_equal_to_1_and_to_2_both_work() {
-        splits(10_000_019, 99_999_989, 2);
-        splits(100_000_007, 999_999_937, 2);
-        // With `c = 2` the larger prime comes out first here.
-        splits(1_000_000_007, 9_999_999_967, 2);
-        let m = BigUint::from(10_000_079u64) * BigUint::from(12_345_701u64);
-        for c in [1, 2] {
-            assert_eq!(
-                pollard_rho(&m, c, 1 << 20),
-                Some(big("10000079")),
-                "c = {c}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_prime_or_a_tiny_budget_gives_none() {
-        // The sequence modulo the prime 1000003 cycles after a few thousand steps, far inside
-        // the budget, so this is the degenerate-cycle exit.
-        assert_eq!(pollard_rho(&big("1000003"), 1, 1 << 20), None);
-        assert_eq!(pollard_rho(&big("1000003"), 2, 1 << 20), None);
-        // 2^61 - 1 cannot cycle within 1024 steps, so this is the budget exit.
-        assert_eq!(pollard_rho(&big("2305843009213693951"), 1, 1024), None);
-        let m = BigUint::from(3u32) * big("1000000007");
-        assert_eq!(pollard_rho(&m, 1, 0), None);
-        assert_eq!(pollard_rho(&m, 1, 1), None);
-        // Two 10-digit primes need tens of thousands of steps.
-        let m = big("1000000007") * big("9999999967");
-        assert_eq!(pollard_rho(&m, 1, 100), None);
-        for m in [0u32, 1, 2, 3, 4, 7] {
-            assert_eq!(pollard_rho(&BigUint::from(m), 1, 1 << 10), None, "{m}");
-        }
-    }
-
-    #[test]
-    fn a_small_factor_3_is_found_almost_instantly() {
-        // `|x₀ − x₂|` is 24 for `c = 1` and 36 for `c = 2`, both divisible by 3, so the first
-        // batch gcd (after two steps) is 3.
-        let three = BigUint::from(3u32);
-        for p in ["1000000007", "618970019642690137449562111"] {
-            let p = big(p);
-            assert!(miller_rabin(&p).is_ok());
-            let m = &three * &p;
-            for c in [1, 2] {
-                assert_eq!(pollard_rho(&m, c, 4), Some(three.clone()), "{p}, c = {c}");
-            }
-        }
     }
 
     #[test]

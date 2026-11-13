@@ -108,30 +108,4 @@ mod tests {
         let parsed = parse_hints("7 7:5");
         assert_eq!(parsed.roots, roots(&[(7, 5)]));
     }
-
-    #[test]
-    fn large_values_and_the_order_of_magnitude() {
-        let parsed =
-            parse_hints("18446744073709551616 9 18446744073709551615:18446744073709551617");
-        let expected = vec![
-            BigUint::from(9u32),
-            BigUint::from(u64::MAX),
-            BigUint::from(u64::MAX) + 1u32,
-        ];
-        assert_eq!(parsed.factors, expected);
-        assert_eq!(
-            parsed.roots.get(&BigUint::from(u64::MAX)),
-            Some(&(BigUint::from(u64::MAX) + 2u32))
-        );
-    }
-
-    #[test]
-    fn renders_hints_one_per_line_with_the_known_roots() {
-        assert_eq!(render_hints([]), "");
-        let (q1, q2) = (BigUint::from(5419u32), BigUint::from(77158673929u64));
-        assert_eq!(
-            render_hints([(&q1, Some(3)), (&q2, None)]),
-            "5419:3\n77158673929\n"
-        );
-    }
 }

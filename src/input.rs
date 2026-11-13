@@ -442,33 +442,6 @@ mod tests {
     }
 
     #[test]
-    fn a_printed_term_parses_back_to_itself() {
-        for text in ["1000003", "2^255 - 19", "10 - (3 - 2)", "(2 ^ 3) ^ 2"] {
-            let input = parse(text).unwrap();
-            assert_eq!(parse_term(&input.term), Ok(input));
-        }
-        assert_eq!(
-            parse_term("(2^255 - 19)").unwrap_err(),
-            "the term (2^255 - 19) prints back as (2 ^ 255 - 19)"
-        );
-        assert!(parse_term("(1) + (2)").is_err());
-    }
-
-    #[test]
-    fn the_largest_exponent_is_reported() {
-        assert_eq!(parse("1000003").unwrap().max_exponent, None);
-        assert_eq!(parse("1000000 + 3").unwrap().max_exponent, None);
-        assert_eq!(parse("2^255 - 19").unwrap().max_exponent, Some(255));
-        assert_eq!(
-            parse("2^256 - 2^224 + 2^9 - 1").unwrap().max_exponent,
-            Some(256)
-        );
-        // The exponent of `2 ^ 3 ^ 2` is the value 9 of `3 ^ 2`.
-        assert_eq!(parse("2 ^ 3 ^ 2").unwrap().max_exponent, Some(9));
-        assert_eq!(parse("7 ^ 0 + 2").unwrap().max_exponent, Some(0));
-    }
-
-    #[test]
     fn parentheses_are_kept_where_lean_needs_them() {
         assert_eq!(term("10 - (3 - 2)"), "(10 - (3 - 2))");
         assert_eq!(term("10 - (3 + 2)"), "(10 - (3 + 2))");

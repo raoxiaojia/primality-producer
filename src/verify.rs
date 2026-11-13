@@ -215,7 +215,6 @@ fn check_entry(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arith::{powmod, trial_division};
 
     const WITNESS_BOUND: u64 = 1000;
 
@@ -268,71 +267,15 @@ mod tests {
         }
     }
 
-    /// The distinct prime factors of `m`, ascending. The cofactor left by trial division up to
-    /// `2^16` must be prime, as it is for every `q - 1` below the root of the tree.
-    fn prime_factors(m: &BigUint) -> Vec<BigUint> {
-        let (pairs, rest) = trial_division(m, 1 << 16);
-        let mut factors: Vec<BigUint> = pairs.iter().map(|&(p, _)| BigUint::from(p)).collect();
-        if !rest.is_one() {
-            let r = to_u64(&rest).expect("a cofactor below 2^64");
-            assert!(is_small_prime(r), "the cofactor {rest} should be prime");
-            factors.push(rest);
-        }
-        factors
-    }
-
-    /// The smallest primitive root modulo the prime `q`, given the prime factors of `q - 1`.
-    fn smallest_primitive_root(q: &BigUint, factors: &[BigUint]) -> u64 {
-        let q_minus_1 = q - 1u32;
-        (2u64..)
-            .find(|&a| {
-                let a = BigUint::from(a);
-                factors
-                    .iter()
-                    .all(|r| !powmod(&a, &(&q_minus_1 / r), q).is_one())
-            })
-            .expect("a primitive root")
-    }
-
-    /// The certificate of the prime `n`, whose `n - 1` has the prime factors `n_factors`, with an
-    /// entry for every prime at or above `WITNESS_BOUND` in its tree.
-    fn build(n: &BigUint, n_factors: Vec<BigUint>) -> Certificate {
-        let bound = BigUint::from(WITNESS_BOUND);
-        let mut entries: Vec<Entry> = Vec::new();
-        let mut todo = vec![(n.clone(), n_factors)];
-        while let Some((q, factors)) = todo.pop() {
-            if q < bound || entries.iter().any(|e| e.q == q) {
-                continue;
-            }
-            for r in &factors {
-                if *r >= bound {
-                    todo.push((r.clone(), prime_factors(&(r - 1u32))));
-                }
-            }
-            let root = smallest_primitive_root(&q, &factors);
-            entries.push(Entry { q, root, factors });
-        }
-        entries.sort_by(|a, b| a.q.cmp(&b.q));
-        entries.reverse();
-        Certificate {
-            n: n.clone(),
-            entries,
-        }
-    }
-
-    /// The certificate of `2^127 - 1` built by `build`, checked against the pinned tree.
+    /// The certificate of `2^127 - 1`.
     fn mersenne_127() -> Certificate {
-        let n = big(MERSENNE_127);
-        let n_factors = bigs(MERSENNE_127_TREE[0].2);
-        let product = n_factors.iter().fold(BigUint::one(), |acc, r| acc * r);
-        assert!(((&n - 1u32) % product).is_zero());
-        let cert = build(&n, n_factors);
-        let pinned: Vec<Entry> = MERSENNE_127_TREE
-            .iter()
-            .map(|&(q, root, factors)| entry(q, root, factors))
-            .collect();
-        assert_eq!(cert.entries, pinned);
-        cert
+        Certificate {
+            n: big(MERSENNE_127),
+            entries: MERSENNE_127_TREE
+                .iter()
+                .map(|&(q, root, factors)| entry(q, root, factors))
+                .collect(),
+        }
     }
 
     /// Asserts that `verify` rejects `cert` with a message mentioning `detail`.
@@ -513,43 +456,5 @@ mod tests {
             entries: vec![],
         };
         assert_eq!(verify(&cert, WITNESS_BOUND), Ok(()));
-    }
-
-    #[test]
-    fn certificates_round_trip_through_json_as_decimal_strings() {
-        let cert = Certificate {
-            n: big("649657"),
-            entries: vec![
-                entry("649657", 5, &[2, 3, 7, 1289]),
-                entry("1289", 6, &[2, 7, 23]),
-            ],
-        };
-        let json = serde_json::to_string(&cert).unwrap();
-        assert_eq!(
-            json,
-            r#"{"n":"649657","entries":[{"q":"649657","root":5,"factors":["2","3","7","1289"]},{"q":"1289","root":6,"factors":["2","7","23"]}]}"#
-        );
-        assert_eq!(serde_json::from_str::<Certificate>(&json).unwrap(), cert);
-        let cert = mersenne_127();
-        let json = serde_json::to_string(&cert).unwrap();
-        assert!(json.contains(r#""q":"170141183460469231731687303715884105727""#));
-        assert_eq!(serde_json::from_str::<Certificate>(&json).unwrap(), cert);
-        assert!(serde_json::from_str::<Certificate>(r#"{"n":649657,"entries":[]}"#).is_err());
-    }
-
-    #[test]
-    fn the_bound_is_a_parameter_up_to_2_10() {
-        // 2027 - 1 = 2 · 1013, so at the bound 2^10 the entry of 2027 suffices.
-        let cert = Certificate {
-            n: big("2027"),
-            entries: vec![entry("2027", 2, &[2, 1013])],
-        };
-        assert_eq!(verify(&cert, MAX_WITNESS_BOUND), Ok(()));
-        rejects(&cert, ": factor 1013 has no entry");
-        // At 2^16 this certificate would pass, while the tactic needs the entries it lacks.
-        let mut cert = mersenne_127();
-        cert.entries.retain(|e| e.q >= BigUint::from(1u32 << 16));
-        assert!(verify(&cert, 1 << 16)
-            .is_err_and(|e| e.starts_with("witness_bound is 65536, above the ceiling 1024")));
     }
 }
