@@ -96,10 +96,16 @@ pub fn targets() -> String {
 #[wasm_bindgen]
 pub fn run_task(task_json: &str, progress: &Function) -> String {
     let result = match serde_json::from_str::<Task>(task_json) {
-        Ok(task) => task::run_task(&task, &mut |done| {
-            // A throwing callback must not abort the task.
-            let _ = progress.call1(&JsValue::NULL, &JsValue::from(done));
-        }),
+        // A worker cannot read a stop signal during a task, so the page replaces a worker
+        // instead of stopping its task.
+        Ok(task) => task::run_task(
+            &task,
+            &mut |done| {
+                // A throwing callback must not abort the task.
+                let _ = progress.call1(&JsValue::NULL, &JsValue::from(done));
+            },
+            &|| false,
+        ),
         Err(e) => TaskResult {
             id: 0,
             outcome: Outcome::Error {

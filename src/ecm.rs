@@ -158,8 +158,15 @@ fn suyama_curve(m: &BigUint, sigma: u64) -> Result<(Curve<'_>, Point), BigUint> 
 }
 
 /// One ECM curve on `m` from Suyama's parametrization with `sigma ≥ 6`, with the stage 1 bound
-/// `b1` and the stage 2 bound `b2`. Returns a nontrivial divisor of `m` or `None`.
-pub fn ecm_curve(m: &BigUint, sigma: u64, b1: u64, b2: u64) -> Option<BigUint> {
+/// `b1` and the stage 2 bound `b2`. Returns a nontrivial divisor of `m` or `None`, and `None` as
+/// soon as `stop()` is true (polled once per prime of stage 1 and per giant step of stage 2).
+pub fn ecm_curve(
+    m: &BigUint,
+    sigma: u64,
+    b1: u64,
+    b2: u64,
+    stop: &dyn Fn() -> bool,
+) -> Option<BigUint> {
     if m.bits() < 2 {
         return None; // `m < 2` has no nontrivial divisor and no residues to compute with
     }
@@ -170,6 +177,9 @@ pub fn ecm_curve(m: &BigUint, sigma: u64, b1: u64, b2: u64) -> Option<BigUint> {
 
     // Stage 1.
     for p in primes_in(2..=b1) {
+        if stop() {
+            return None;
+        }
         let mut power = p;
         loop {
             point = curve.ladder(&point, p);
@@ -211,6 +221,9 @@ pub fn ecm_curve(m: &BigUint, sigma: u64, b1: u64, b2: u64) -> Option<BigUint> {
     // A prime below `D/2` rounds to `k = 0`, which has no giant step (only when `b1 < D/2`).
     while primes.next_if(|&p| (p + half) / d < k0).is_some() {}
     for k in k0..=k_last {
+        if stop() {
+            return None;
+        }
         let target = k * d;
         while let Some(p) = primes.next_if(|&p| (p + half) / d == k) {
             let j = p.abs_diff(target);
@@ -245,6 +258,11 @@ mod tests {
 
     fn big(s: &str) -> BigUint {
         BigUint::parse_bytes(s.as_bytes(), 10).unwrap()
+    }
+
+    /// The `stop` of a curve that runs to the end.
+    fn never() -> bool {
+        false
     }
 
     /// Whether two projective points have the same x-coordinate modulo `m`.
@@ -295,7 +313,7 @@ mod tests {
     ) -> Option<(u64, BigUint)> {
         sigmas
             .into_iter()
-            .find_map(|sigma| ecm_curve(m, sigma, b1, b2).map(|d| (sigma, d)))
+            .find_map(|sigma| ecm_curve(m, sigma, b1, b2, &never).map(|d| (sigma, d)))
     }
 
     #[test]
@@ -325,9 +343,26 @@ mod tests {
         // `sigma = 10` finds `p` in stage 2 only, and `sigma = 28` in stage 1 already.
         let (p, q) = first_level_primes();
         let m = &p * &q;
-        assert_eq!(ecm_curve(&m, 10, 2000, 2000), None);
-        assert_eq!(ecm_curve(&m, 10, 2000, 200_000), Some(p.clone()));
-        assert_eq!(ecm_curve(&m, 28, 2000, 2000), Some(p));
+        assert_eq!(ecm_curve(&m, 10, 2000, 2000, &never), None);
+        assert_eq!(ecm_curve(&m, 10, 2000, 200_000, &never), Some(p.clone()));
+        assert_eq!(ecm_curve(&m, 28, 2000, 2000, &never), Some(p));
+    }
+
+    #[test]
+    fn a_curve_ends_once_stop_is_true() {
+        // The curve of `stage_2_finds_what_stage_1_misses` that finds `p` in stage 2. Stage 1
+        // polls once for each of the 303 primes below 2000, so the stops fall in either stage.
+        let (p, q) = first_level_primes();
+        let m = &p * &q;
+        for asked_after in [10, 400] {
+            let polls = std::cell::Cell::new(0);
+            let stop = || {
+                polls.set(polls.get() + 1);
+                polls.get() > asked_after
+            };
+            assert_eq!(ecm_curve(&m, 10, 2000, 200_000, &stop), None);
+            assert_eq!(polls.get(), asked_after + 1);
+        }
     }
 
     #[test]
@@ -335,8 +370,8 @@ mod tests {
         let (p, q) = first_level_primes();
         let m = &p * &q;
         for sigma in [9u64, 10, 28] {
-            let first = ecm_curve(&m, sigma, 2000, 200_000);
-            let second = ecm_curve(&m, sigma, 2000, 200_000);
+            let first = ecm_curve(&m, sigma, 2000, 200_000, &never);
+            let second = ecm_curve(&m, sigma, 2000, 200_000, &never);
             assert_eq!(first, second, "sigma = {sigma}");
         }
     }
@@ -345,22 +380,31 @@ mod tests {
     fn inversion_failure_yields_the_common_factor() {
         // `sigma = 6` gives `u = 31`, so `16 u³ v` shares the factor 31 with `m = 31 · 1000003`.
         let s = big("1000003");
-        assert_eq!(ecm_curve(&(&s * 31u32), 6, 2000, 200_000), Some(big("31")));
+        assert_eq!(
+            ecm_curve(&(&s * 31u32), 6, 2000, 200_000, &never),
+            Some(big("31"))
+        );
         // `sigma = 10` gives `u = 95 = 5 · 19`.
-        assert_eq!(ecm_curve(&(&s * 19u32), 10, 2000, 200_000), Some(big("19")));
-        assert_eq!(ecm_curve(&(&s * 5u32), 10, 2000, 200_000), Some(big("5")));
+        assert_eq!(
+            ecm_curve(&(&s * 19u32), 10, 2000, 200_000, &never),
+            Some(big("19"))
+        );
+        assert_eq!(
+            ecm_curve(&(&s * 5u32), 10, 2000, 200_000, &never),
+            Some(big("5"))
+        );
         // `m = 93 = 3 · 31` divides `16 · 31³ · 24`: the gcd is `m` and the curve is unusable.
-        assert_eq!(ecm_curve(&big("93"), 6, 2000, 200_000), None);
+        assert_eq!(ecm_curve(&big("93"), 6, 2000, 200_000, &never), None);
     }
 
     #[test]
     fn a_prime_modulus_and_tiny_moduli_give_none() {
         let p = big("10000000000000000051");
-        assert_eq!(ecm_curve(&p, 6, 2000, 200_000), None);
-        assert_eq!(ecm_curve(&p, 7, 2000, 200_000), None);
-        assert_eq!(ecm_curve(&big("1000003"), 6, 2000, 200_000), None);
-        assert_eq!(ecm_curve(&BigUint::zero(), 6, 2000, 200_000), None);
-        assert_eq!(ecm_curve(&BigUint::one(), 6, 2000, 200_000), None);
-        assert_eq!(ecm_curve(&big("2"), 6, 2000, 200_000), None);
+        assert_eq!(ecm_curve(&p, 6, 2000, 200_000, &never), None);
+        assert_eq!(ecm_curve(&p, 7, 2000, 200_000, &never), None);
+        assert_eq!(ecm_curve(&big("1000003"), 6, 2000, 200_000, &never), None);
+        assert_eq!(ecm_curve(&BigUint::zero(), 6, 2000, 200_000, &never), None);
+        assert_eq!(ecm_curve(&BigUint::one(), 6, 2000, 200_000, &never), None);
+        assert_eq!(ecm_curve(&big("2"), 6, 2000, 200_000, &never), None);
     }
 }
