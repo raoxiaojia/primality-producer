@@ -22,6 +22,7 @@ jobs:
   deploy:
     if: github.ref == 'refs/heads/personal'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       # A missing secret would otherwise surface only after the build, or not at all for
       # DEPLOY_TARGET (the script skips the copy when it is empty).
