@@ -1,0 +1,31 @@
+[package]
+name = "primality-producer"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.87"
+description = "Lean proofs of primality from Lucas certificates, as a static web page and a command-line tool"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+name = "primality_producer"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "primality-cert"
+path = "src/bin/main.rs"
+
+[dependencies]
+num-bigint = "0.5"
+num-integer = "0.1"
+num-traits = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+
+[profile.release]
+lto = true
+codegen-units = 1

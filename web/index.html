@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Primality certificate generator</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="./style.css?v=dev">
+</head>
+<body>
+  <header>
+    <h1>Primality certificate generator</h1>
+    <p class="intro">
+      Produces a Lean <code>example</code> proving <var>p</var> prime with
+      <span id="tools">Mathlib's <code>primality</code> tactic</span>. Everything runs in the
+      browser.
+    </p>
+  </header>
+  <noscript><p class="error">This page needs JavaScript and WebAssembly.</p></noscript>
+
+  <div class="layout">
+    <aside id="gallery" class="gallery">
+      <h2>Gallery</h2>
+      <p id="galleryNote" class="meta" hidden></p>
+      <div id="galleryList"></div>
+    </aside>
+
+    <main>
+      <form id="form" autocomplete="off">
+        <label for="n">Number <var>p</var> (at most 1000 digits)</label>
+        <textarea id="n" rows="3" spellcheck="false" required
+          placeholder="Decimal digits, or an expression with + - * ^ and parentheses such as 2^255 - 19"></textarea>
+        <p id="inputError" class="error" role="alert" hidden></p>
+
+        <label for="hints">Known factors of <var>p</var> − 1 (optional)</label>
+        <p id="hintsHelp" class="help">
+          Factors of <var>q</var> − 1 for the smaller primes <var>q</var> in the certificate help
+          too. Write <code>q:a</code> to suggest a primitive root <var>a</var> of <var>q</var>.
+        </p>
+        <textarea id="hints" rows="3" spellcheck="false" aria-describedby="hintsHelp"
+          placeholder="One factor per line, or any separators"></textarea>
+
+        <div class="row">
+          <label for="workers">Workers</label>
+          <input id="workers" type="number" min="1" max="64" step="1">
+          <button id="generate" type="submit">Generate certificate</button>
+          <button id="stop" type="button" disabled>Stop</button>
+        </div>
+      </form>
+      <p id="announcer" class="visually-hidden" role="status"></p>
+
+      <section id="run" hidden>
+        <p id="galleryInfo" class="gallery-info" hidden></p>
+        <p id="status" class="status"></p>
+        <p id="elapsed"></p>
+
+        <div id="levelBox" hidden>
+          <progress id="progress" value="0" max="1" aria-labelledby="levelText"></progress>
+          <span id="levelText"></span>
+        </div>
+        <p id="searched" hidden></p>
+
+        <h2 id="stoppedHeading" hidden>Stopped</h2>
+
+        <div id="outputBox" hidden>
+          <h2>Lean example</h2>
+          <div id="targets" class="targets" role="group" aria-label="Output target"></div>
+          <p id="requires" hidden></p>
+          <div class="actions">
+            <button id="copyOutput" type="button">Copy</button>
+            <a id="playground" target="_blank" rel="noopener" hidden>Open in Lean playground</a>
+          </div>
+          <pre id="output"></pre>
+        </div>
+
+        <p id="reason" class="reason" hidden></p>
+
+        <div id="factorsBox" hidden>
+          <p>Found factors (paste them back into Known factors):</p>
+          <pre id="factors"></pre>
+          <button id="copyFactors" type="button">Copy found factors</button>
+        </div>
+
+        <div id="treeBox" hidden>
+          <h2>Tree</h2>
+          <ul id="tree" class="tree"></ul>
+        </div>
+
+        <div id="hintsBox" hidden>
+          <h2>Known factors</h2>
+          <ul id="hintsList"></ul>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script type="module" src="./main.js?v=dev"></script>
+</body>
+</html>

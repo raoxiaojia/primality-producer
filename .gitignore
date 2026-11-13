@@ -1,0 +1,4 @@
+target/
+web/pkg/
+dist/
+__pycache__/

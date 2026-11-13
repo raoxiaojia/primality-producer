@@ -1,0 +1,4 @@
+# Scripts keep LF line endings on every checkout, so that they run from a shell.
+*.sh text eol=lf
+*.py text eol=lf
+*.mjs text eol=lf
