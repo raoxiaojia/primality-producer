@@ -255,8 +255,8 @@ fn panic_message(payload: &(dyn Any + Send)) -> String {
     }
 }
 
-/// Locks the driver (or the stop flags), recovering from poisoning: the final snapshot is still
-/// wanted after a worker panicked while holding the lock.
+/// Locks `mutex`, recovering from poisoning. The final snapshot is still wanted after a worker
+/// panicked while holding the driver's lock.
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
