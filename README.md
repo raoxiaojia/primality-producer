@@ -11,7 +11,7 @@ Each output target is a module of `src/targets/`, listed in `src/targets.rs` and
 ## Build
 
 Building needs Rust through rustup (`rust-toolchain.toml` pins the release) and, for the page,
-[wasm-pack](https://rustwasm.github.io/wasm-pack/).
+[wasm-pack](https://wasm-bindgen.github.io/wasm-pack/).
 
 - `cargo build --release` builds the command-line tool `target/release/primality-cert`.
 - `scripts/build-web.sh` builds the page into `dist/`, a static site to copy to any host.
