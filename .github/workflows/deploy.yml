@@ -1,0 +1,63 @@
+# Builds the page and copies it to the server. It needs three Actions secrets. DEPLOY_SSH_KEY is
+# a passphrase-free ed25519 private key made for this (`ssh-keygen -t ed25519 -N ''`), whose public
+# key is in the server's authorized_keys. DEPLOY_KNOWN_HOSTS is the output of `ssh-keyscan HOST`
+# for the host in DEPLOY_TARGET. DEPLOY_TARGET is `user@host:/path/to/folder`, as for
+# `scripts/build-web.sh --deploy`.
+name: Deploy
+
+on:
+  push:
+    branches: [personal]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A deploy cancelled halfway would leave the site half copied, so a newer push waits instead.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/personal'
+    runs-on: ubuntu-latest
+    steps:
+      # A missing secret would otherwise surface only after the build, or not at all for
+      # DEPLOY_TARGET (the script skips the copy when it is empty).
+      - name: Check the secrets
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_TARGET: ${{ secrets.DEPLOY_TARGET }}
+        run: ': "${DEPLOY_SSH_KEY:?}" "${DEPLOY_KNOWN_HOSTS:?}" "${DEPLOY_TARGET:?}"'
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Test
+        run: cargo test --locked
+
+      - name: Install wasm-pack
+        run: |
+          version=v0.15.1
+          sha256=410101009739b9d01c7d5affaaad6e9c9a24b4cba6791a4805db8e89b9bf7af2
+          name=wasm-pack-$version-x86_64-unknown-linux-musl
+          curl -sSfL -o wasm-pack.tar.gz \
+            "https://github.com/wasm-bindgen/wasm-pack/releases/download/$version/$name.tar.gz"
+          echo "$sha256  wasm-pack.tar.gz" | sha256sum -c
+          tar xzf wasm-pack.tar.gz --strip-components=1 -C "$HOME/.cargo/bin" "$name/wasm-pack"
+
+      - name: Set up SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" | tr -d '\r' > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Build and deploy
+        env:
+          DEPLOY_TARGET: ${{ secrets.DEPLOY_TARGET }}
+        run: scripts/build-web.sh --deploy "$DEPLOY_TARGET"
