@@ -6,10 +6,11 @@ use serde::{Deserialize, Serialize};
 use crate::input::Input;
 use crate::verify::Certificate;
 
+pub mod hex;
 pub mod mathlib;
 
 /// The output targets, in the order of the page's buttons. The first is the default.
-pub const TARGETS: &[Target] = &[mathlib::TARGET];
+pub const TARGETS: &[Target] = &[mathlib::TARGET, hex::TARGET];
 
 /// An output target. It serializes without `render`, for the page (`wasm::targets`).
 #[derive(Serialize)]

@@ -22,7 +22,7 @@ wasm-pack build --target web --release --no-typescript --out-dir web/pkg
 
 rm -rf "$dist"
 mkdir -p "$dist/pkg"
-for name in index.html style.css main.js worker.js gallery.json; do
+for name in index.html credits.html style.css main.js worker.js gallery.json; do
   cp "web/$name" "$dist/"
 done
 cp web/pkg/*.js web/pkg/*.wasm "$dist/pkg/"
