@@ -52,6 +52,6 @@ The page takes `?n=…`, `?hints=…`, `?workers=…` and `?target=…` to prefi
 
 ## Gallery
 
-`web/gallery.json` lists special primes with hints that let each certify in about a second.
+`web/gallery.json` lists special primes with hints that let each certify within a few seconds.
 `python scripts/gallery/build_gallery.py` builds it from `scripts/gallery/entries.json` and the
 hint files in `scripts/gallery/hints/`.

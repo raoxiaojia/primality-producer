@@ -334,8 +334,7 @@ function checkReuse(reuse, exercised) {
   }
 }
 
-// Submits the form with `n` and waits until the page has left its previous state (`startRun`
-// awaits the wasm module before it changes the state).
+// Submits the form with `n` and waits until the page has left its previous state.
 async function submitForm(n) {
   const before = window.__pp.status();
   ui.n.value = n;
@@ -590,6 +589,18 @@ run = await observeRun(60_000);
 check(run.status === 'certified', `the following form run is certified (${run.status})`);
 check(ui.galleryInfo.hidden, 'a run from the form clears the gallery info line');
 
+// A blank worker box gives the default count.
+const defaultWorkers = Math.min(64, Math.max(1, navigator.hardwareConcurrency || 4));
+ui.n.value = '65537';
+ui.workers.value = '';
+ui.form.handlers.submit({ preventDefault() {} });
+check(
+  String(ui.workers.value) === String(defaultWorkers),
+  `a blank worker box gives the default ${defaultWorkers} (${ui.workers.value})`,
+);
+run = await observeRun(60_000);
+check(run.status === 'certified', `the run with the default worker count is certified (${run.status})`);
+
 // --- Run 5: the worker of a stale ECM task is replaced ------------------------------------------
 
 console.log(`\n--- run 5: n = ${N}, the product reaches ECM ---`);
@@ -615,6 +626,28 @@ check(
   JSON.stringify(cut) === '["Ecm"]',
   `the worker of the stale ECM task was terminated mid-task (${JSON.stringify(cut)})`,
 );
+
+// --- Run 6: a trap of the page's own wasm instance, which must come last ------------------------
+
+console.log('\n--- run 6: the driver traps ---');
+behaviour = () => ({ delay: 0, trap: false });
+// The page imports the same module, so this is the class of its driver.
+pkg.WasmDriver.prototype.submit = () => {
+  throw new WebAssembly.RuntimeError('unreachable');
+};
+await submitForm('65537');
+run = await observeRun(60_000);
+console.log(`reason: ${ui.reason.textContent}`);
+check(run.status === 'failed', `the run fails (${run.status})`);
+check(
+  /^RuntimeError: unreachable.*\. Reload the page to start another run\.$/.test(ui.reason.textContent),
+  'the reason asks for a reload',
+);
+check(byId('generate').disabled && entryButton.disabled, 'Generate and the gallery stay disabled');
+workersBefore = workers.length;
+ui.form.handlers.submit({ preventDefault() {} });
+await sleep(50);
+check(window.__pp.status() === 'failed' && workers.length === workersBefore, 'a submit starts no run');
 
 console.log(failures.length === 0 ? '\nOK' : `\n${failures.length} check(s) failed`);
 process.exit(failures.length === 0 ? 0 : 1);

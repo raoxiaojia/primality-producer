@@ -141,7 +141,8 @@ fn parse_count(text: &str, option: &str) -> Result<usize, String> {
 
 /// Runs the driver on `args.threads` worker threads, with progress on stderr about once per
 /// second and at the end (unless `args.quiet`). A finished run is reported and exits the process
-/// from inside the loop, so this returns only when every worker stopped before the run finished.
+/// from inside the loop, as does a panic inside the driver, so this returns only when every worker
+/// stopped before the run finished.
 fn run(driver: Driver, args: &Args) -> Snapshot {
     let driver = Mutex::new(driver);
     let running = Mutex::new(HashMap::new());
@@ -156,24 +157,37 @@ fn run(driver: Driver, args: &Args) -> Snapshot {
         }
         let mut last_report: Option<Instant> = None;
         loop {
-            let finished = {
+            // A panic inside the driver leaves its state unknown and may lose the result the run
+            // waits for.
+            if driver.is_poisoned() {
+                exit_driver_panicked();
+            }
+            let step = panic::catch_unwind(AssertUnwindSafe(|| {
                 let guard = lock(&driver);
                 let finished = guard.is_finished();
-                let due = last_report.is_none_or(|t| t.elapsed() >= Duration::from_secs(1));
-                if !args.quiet && (due || finished) {
-                    eprint!("{}", progress_text(&guard.snapshot(), start.elapsed()));
+                let due = !args.quiet
+                    && last_report.is_none_or(|t| t.elapsed() >= Duration::from_secs(1));
+                (finished, (finished || due).then(|| guard.snapshot()))
+            }));
+            let Ok((finished, snapshot)) = step else {
+                exit_driver_panicked();
+            };
+            if let Some(snapshot) = snapshot {
+                // Printed after the lock is released, so that a slow stderr does not stall the
+                // workers.
+                if !args.quiet {
+                    eprint!("{}", progress_text(&snapshot, start.elapsed()));
                     last_report = Some(Instant::now());
                 }
-                finished.then(|| guard.snapshot())
-            };
-            if let Some(snapshot) = finished {
-                // Leaving the scope would wait for the workers, and a worker returns only when
-                // its task does (minutes for a large input). Exiting here prints the verdict at
-                // once.
-                let code = report(&snapshot, args);
-                let _ = io::stdout().flush();
-                let _ = io::stderr().flush();
-                process::exit(i32::from(code));
+                if finished {
+                    // Leaving the scope would wait for the workers, and a worker returns only
+                    // when its task does (minutes for a large input). Exiting here prints the
+                    // verdict at once.
+                    let code = report(&snapshot, args);
+                    let _ = io::stdout().flush();
+                    let _ = io::stderr().flush();
+                    process::exit(i32::from(code));
+                }
             }
             if live_workers.load(Ordering::SeqCst) == 0 {
                 break;
@@ -185,6 +199,14 @@ fn run(driver: Driver, args: &Args) -> Snapshot {
         .into_inner()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     driver.snapshot()
+}
+
+/// Ends the process with exit code 3. The panic message is already on stderr.
+fn exit_driver_panicked() -> ! {
+    eprintln!("internal error: the driver panicked");
+    let _ = io::stdout().flush();
+    let _ = io::stderr().flush();
+    process::exit(3);
 }
 
 /// Decrements the live-worker count when dropped, so a panicking worker is counted out too.
@@ -255,8 +277,7 @@ fn panic_message(payload: &(dyn Any + Send)) -> String {
     }
 }
 
-/// Locks `mutex`, recovering from poisoning. The final snapshot is still wanted after a worker
-/// panicked while holding the driver's lock.
+/// Locks `mutex`, ignoring poisoning, which the main loop checks for on the driver's lock.
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()

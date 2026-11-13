@@ -43,5 +43,14 @@ done)
 
 if [ -n "$deploy" ]; then
   echo "copying dist/ to $deploy"
-  scp -r "$dist"/* "$deploy/"
+  # The pages and main.js go last, so that a visitor during the copy never loads a page whose
+  # versioned URLs name files not yet copied.
+  set --
+  for file in "$dist"/*; do
+    case ${file##*/} in
+      main.js | *.html) ;;
+      *) set -- "$@" "$file" ;;
+    esac
+  done
+  scp -r "$@" "$dist/main.js" "$dist"/*.html "$deploy"
 fi

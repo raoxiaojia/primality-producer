@@ -7,6 +7,8 @@
 import init, { WasmDriver, take_panic_message, targets } from './pkg/primality_producer.js?v=dev';
 
 const MAX_WORKERS = 64;
+// One worker per logical processor (4 when the browser does not say).
+const DEFAULT_WORKERS = Math.min(MAX_WORKERS, Math.max(1, navigator.hardwareConcurrency || 4));
 // Renders happen at most this often.
 const RENDER_INTERVAL_MS = 200;
 // A number with more digits than this is followed by its digit count.
@@ -40,8 +42,13 @@ const galleryButtons = [];
 // The selected output target, a key of TARGETS. It outlives runs; `?target=…` sets it at load,
 // and the first target is the default.
 let selectedTarget = null;
+// Runs need the main thread's wasm instance. A Rust panic traps it, after which no call into it is
+// safe, so the page then asks for a reload instead of starting another run.
+let wasmLoaded = false;
+let wasmTrapped = false;
 
 // The main thread's wasm instance. The driver's calls are bookkeeping and stay fast.
+ui.generate.disabled = true;
 const wasmReady = init({
   module_or_path: new URL('./pkg/primality_producer_bg.wasm?v=dev', import.meta.url),
 }).then(() => {
@@ -52,8 +59,10 @@ const wasmReady = init({
     selectedTarget = TARGETS.keys().next().value;
   }
   renderTools();
+  wasmLoaded = true;
+  setStartEnabled(canStart());
 });
-wasmReady.catch((e) => setStatusText(`The wasm module failed to load: ${e}`));
+wasmReady.catch((e) => showInputError(`The WebAssembly module failed to load: ${errorMessage(e)}`));
 const galleryReady = loadGallery();
 
 // The hook of the browser and page checks, installed only by `?test=1`.
@@ -63,11 +72,11 @@ if (new URLSearchParams(location.search).get('test') === '1') {
     status: () => state,
     target: () => selectedTarget,
     workers: () => (run ? run.workers.filter((slot) => slot.ready).length : 0),
-    // `gallery(id)` waits for gallery.json, selects the entry as its button does and resolves to
-    // whether a run started.
+    // `gallery(id)` waits for gallery.json and the wasm module, selects the entry as its button
+    // does and resolves to whether a run started.
     galleryIds: () => [...galleryEntries.keys()],
     gallery: async (id) => {
-      await galleryReady;
+      await Promise.all([galleryReady, wasmReady]);
       return selectGalleryEntry(id);
     },
   };
@@ -90,7 +99,7 @@ ui.n.addEventListener('input', () => {
   galleryHints = null;
 });
 
-ui.workers.value = clampWorkers(navigator.hardwareConcurrency || 4);
+ui.workers.value = DEFAULT_WORKERS;
 applyUrlParams();
 
 // --- Setup ---------------------------------------------------------------------------------
@@ -142,11 +151,12 @@ function codeText(text) {
   });
 }
 
-// The worker count as an integer in 1…MAX_WORKERS (4 when unreadable).
+// The worker count as an integer in 1…MAX_WORKERS (the default when `value` is blank or not a
+// number).
 function clampWorkers(value) {
   const count = Math.floor(Number(value));
-  if (!Number.isFinite(count)) {
-    return 4;
+  if (String(value).trim() === '' || !Number.isFinite(count)) {
+    return DEFAULT_WORKERS;
   }
   return Math.min(MAX_WORKERS, Math.max(1, count));
 }
@@ -155,8 +165,8 @@ function clampWorkers(value) {
 
 // Starts a run from the form. A driver error is shown under the number box. `galleryEntry` is the
 // entry the form was filled from (null for none), which the info line names.
-async function startRun(galleryEntry = null) {
-  if (run && !run.done) {
+function startRun(galleryEntry = null) {
+  if (!canStart()) {
     return;
   }
   clearInputError();
@@ -172,20 +182,19 @@ async function startRun(galleryEntry = null) {
   const workerCount = clampWorkers(ui.workers.value);
   ui.workers.value = workerCount;
 
-  try {
-    await wasmReady;
-  } catch (e) {
-    beginRun(null, workerCount);
-    failRun(`the wasm module failed to load: ${e}`);
-    return;
-  }
   let driver;
   try {
     driver = new WasmDriver(n, hintsText);
   } catch (e) {
-    showInputError(e);
+    // A trap is a bug, which the reason line reports. Any other exception is an invalid input.
+    let message = null;
+    if (e instanceof WebAssembly.RuntimeError) {
+      message = failureText(e);
+    } else {
+      showInputError(e);
+    }
     beginRun(null, workerCount);
-    failRun(null);
+    failRun(message);
     return;
   }
   beginRun(driver, workerCount);
@@ -233,9 +242,8 @@ function beginRun(driver, workerCount) {
   // The pressed button is about to be disabled, which would drop the keyboard focus.
   const refocus = document.activeElement === ui.generate
     || galleryButtons.includes(document.activeElement);
-  ui.generate.disabled = true;
+  setStartEnabled(false);
   ui.stop.disabled = false;
-  setGalleryEnabled(false);
   if (refocus) {
     ui.stop.focus();
   }
@@ -250,12 +258,9 @@ function disposeRun() {
   terminateWorkers(run);
   const { driver } = run;
   run = null;
-  // A driver whose call panicked still counts as borrowed, and freeing it throws. It is leaked
-  // instead, so that the next run can start.
-  try {
+  // No call into a trapped instance is safe, so its drivers are leaked.
+  if (!wasmTrapped) {
     driver?.free();
-  } catch (e) {
-    // Leaked.
   }
 }
 
@@ -281,15 +286,26 @@ function currentRun() {
   return run && !run.done ? run : null;
 }
 
-// Runs `action`, turning an exception (a driver call that throws) into a failed run. A panic
-// arrives as a bare "unreachable" trap, so the message the panic hook stored is appended.
+// Runs `action`, turning an exception (a driver call that throws) into a failed run.
 function guarded(action) {
   try {
     action();
   } catch (e) {
-    const panic = panicMessage();
-    failRun(panic ? `${errorMessage(e)} (${panic})` : errorMessage(e));
+    failRun(failureText(e));
   }
+}
+
+// The text a run ends with when a driver call throws `e`. A panic arrives as a bare "unreachable"
+// trap, so the message the panic hook stored is appended, and the trapped instance asks for a
+// reload.
+function failureText(e) {
+  const panic = panicMessage();
+  const text = panic ? `${errorMessage(e)} (${panic})` : errorMessage(e);
+  if (!(e instanceof WebAssembly.RuntimeError)) {
+    return text;
+  }
+  wasmTrapped = true;
+  return `${text}. Reload the page to start another run.`;
 }
 
 // The stored panic message, or undefined. The instance has just trapped, so even this read is
@@ -426,11 +442,23 @@ function endRun() {
   run.ticker = null;
   run.renderTimer = null;
   const refocus = document.activeElement === ui.stop;
-  ui.generate.disabled = false;
+  setStartEnabled(canStart());
   ui.stop.disabled = true;
-  setGalleryEnabled(true);
-  if (refocus) {
+  if (refocus && !ui.generate.disabled) {
     ui.generate.focus();
+  }
+}
+
+// Whether a new run can start now.
+function canStart() {
+  return wasmLoaded && !wasmTrapped && currentRun() === null;
+}
+
+// Enables or disables Generate and the gallery's buttons.
+function setStartEnabled(enabled) {
+  ui.generate.disabled = !enabled;
+  for (const button of galleryButtons) {
+    button.disabled = !enabled;
   }
 }
 
@@ -480,7 +508,7 @@ function renderGallery(gallery) {
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'gallery-entry';
-      button.disabled = currentRun() !== null;
+      button.disabled = !canStart();
       button.append(entry.name, ' ', metaSpan(`${entry.digits} digits`));
       button.addEventListener('click', () => selectGalleryEntry(entry.id));
       galleryButtons.push(button);
@@ -510,13 +538,13 @@ function metaSpan(text) {
 }
 
 // Fills the form from the gallery entry `id` and starts a run. Returns false, changing nothing,
-// while a run is in progress, and throws for an unknown id.
+// while no run can start, and throws for an unknown id.
 function selectGalleryEntry(id) {
   const entry = galleryEntries.get(id);
   if (entry === undefined) {
     throw new Error(`unknown gallery entry ${JSON.stringify(id)}`);
   }
-  if (currentRun() !== null) {
+  if (!canStart()) {
     return false;
   }
   ui.n.value = entry.input === 'expr' ? entry.expr : entry.value;
@@ -537,12 +565,6 @@ function renderGalleryInfo(entry) {
   const note = entry.note ? ` ${entry.note}.` : '';
   ui.galleryInfo.textContent =
     `Gallery: ${entry.name}${ref}, ${entry.expr}, ${entry.digits} digits. Source: ${entry.source}.${note}`;
-}
-
-function setGalleryEnabled(enabled) {
-  for (const button of galleryButtons) {
-    button.disabled = !enabled;
-  }
 }
 
 // --- Rendering -----------------------------------------------------------------------------
