@@ -42,10 +42,10 @@ pub fn parse_input(text: &str, max_digits: usize) -> Result<Input, String> {
         .all(|c| c.is_ascii_digit() || c.is_whitespace())
     {
         let digits: String = text.chars().filter(char::is_ascii_digit).collect();
-        if digits.len() > max_digits {
+        let count = digits.trim_start_matches('0').len().max(1);
+        if count > max_digits {
             return Err(format!(
-                "the input has {} digits, more than the {max_digits} allowed",
-                digits.len()
+                "the input has {count} digits, more than the {max_digits} allowed"
             ));
         }
         let n = BigUint::parse_bytes(digits.as_bytes(), 10).expect("a run of digits parses");
@@ -425,6 +425,8 @@ mod tests {
             parse_input("1234", 3).unwrap_err(),
             "the input has 4 digits, more than the 3 allowed"
         );
+        // Leading zeros do not count.
+        assert_eq!(parse_input("000123", 3).unwrap().n, big("123"));
     }
 
     #[test]

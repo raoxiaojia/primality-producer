@@ -17,8 +17,8 @@ For each prime `q` it meets, starting from `N`, the tactic proves `q` by `norm_n
 `q − 1` and whose `root` is a primitive root of `q` (`root ^ (q - 1) % q = 1`, and
 `root ^ ((q - 1) / r) % q ≠ 1` for every listed `r`), and goes on with the listed factors. An entry
 does not name its prime. So the certificate needs an entry for every prime `q ≥ 2^10` reachable
-from `N` through the prime factors of `q − 1`, and we emit exactly those, each with the smallest
-primitive root.
+from `N` through the prime factors of `q − 1`, and we emit exactly those, each with a primitive
+root (the smallest, unless a hint names another).
 
 ## Output format
 

@@ -255,10 +255,15 @@ fn run_ecm(
     Outcome::NoFactor
 }
 
+/// The largest integer a JavaScript number holds exactly. The page passes certificates through
+/// JSON numbers, which would round a larger root.
+const MAX_EXACT_JS_INTEGER: u64 = (1 << 53) - 1;
+
 /// The hint when it is a root, else the smallest root in `2..=bound` below `q`. A root is an `a`
 /// with `a^(q−1) ≡ 1` and `a^((q−1)/r) ≢ 1` modulo `q` for every `r` in `factors`, the distinct
 /// prime factors of `q − 1`. A prime `q` has its primitive roots as roots, and a composite `q`
-/// has none. The hint is reduced modulo `q` and skipped when the residue does not fit a `u64`.
+/// has none. The hint is reduced modulo `q` and skipped when the residue is above
+/// `MAX_EXACT_JS_INTEGER`.
 ///
 /// The search drops a candidate at its first failing factor, in ascending order. For the factor
 /// 2 it tests `(a | q) = -1`, which for a prime `q` is `a^((q−1)/2) ≢ 1` (Euler's criterion) at
@@ -278,7 +283,12 @@ fn primitive_root(
     let mut factors: Vec<BigUint> = factors.iter().filter(|r| !r.is_zero()).cloned().collect();
     factors.sort();
     factors.dedup();
-    if let Some(a) = hint.map(|a| a % q).as_ref().and_then(arith::to_u64) {
+    let hint = hint.map(|a| a % q);
+    if let Some(a) = hint
+        .as_ref()
+        .and_then(arith::to_u64)
+        .filter(|&a| a <= MAX_EXACT_JS_INTEGER)
+    {
         if a >= 2 {
             let (powers, full) = arith::lucas_powers(&BigUint::from(a), q, &factors);
             if full.is_one() && powers.iter().all(|p| !p.is_one()) {
@@ -621,7 +631,7 @@ mod tests {
             Outcome::Root { root: Some(5) }
         );
         // A large prime: the hinted root 43 (its smallest) and 53 are accepted, the square 4
-        // falls back to the search.
+        // falls back to the search, and so does the root 43^11, which is above 2^53.
         let m127 = "170141183460469231731687303715884105727";
         let factors = [
             2,
@@ -637,7 +647,12 @@ mod tests {
             649657,
             77158673929,
         ];
-        for (hint, expected) in [("43", 43), ("53", 53), ("4", 43)] {
+        for (hint, expected) in [
+            ("43", 43),
+            ("53", 53),
+            ("4", 43),
+            ("929293739471222707", 43),
+        ] {
             assert_eq!(
                 root(m127, &factors, hint),
                 Outcome::Root {
