@@ -147,8 +147,8 @@ pub struct TaskResult {
 
 /// Runs one task. `progress(done)` is called after each ECM curve with the number of curves
 /// finished so far in this task; other tasks never call it. An ECM task polls `stop()` during its
-/// curves and ends with `NoFactor` once it is true, so it is set only for a task whose result is
-/// no longer wanted (`Driver::submit` returns their ids).
+/// curves and ends with `NoFactor` once it is true, so `stop()` may turn true only for a task whose
+/// result is discarded (one whose id `Driver::submit` returned).
 pub fn run_task(task: &Task, progress: &mut dyn FnMut(u32), stop: &dyn Fn() -> bool) -> TaskResult {
     let outcome = match task {
         Task::Analyze { m, trial_bound, .. } => analyze(m, *trial_bound),
