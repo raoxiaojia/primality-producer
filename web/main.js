@@ -36,8 +36,7 @@ let state = 'idle';
 let run = null;
 // The last snapshot rendered, as an object.
 let latestSnapshot = null;
-// The gallery's entries by id, and their buttons in the side menu, filled by `loadGallery`.
-const galleryEntries = new Map();
+// The gallery's buttons in the side menu, filled by `loadGallery`.
 const galleryButtons = [];
 // The selected output target, a key of TARGETS. It outlives runs; `?target=…` sets it at load,
 // and the first target is the default.
@@ -49,38 +48,22 @@ let wasmTrapped = false;
 
 // The main thread's wasm instance. The driver's calls are bookkeeping and stay fast.
 ui.generate.disabled = true;
-const wasmReady = init({
+init({
   module_or_path: new URL('./pkg/primality_producer_bg.wasm?v=dev', import.meta.url),
-}).then(() => {
-  for (const target of JSON.parse(targets())) {
-    TARGETS.set(target.name, target);
-  }
-  if (!TARGETS.has(selectedTarget)) {
-    selectedTarget = TARGETS.keys().next().value;
-  }
-  renderTools();
-  wasmLoaded = true;
-  setStartEnabled(canStart());
-});
-wasmReady.catch((e) => showInputError(`The WebAssembly module failed to load: ${errorMessage(e)}`));
-const galleryReady = loadGallery();
-
-// The hook of the browser and page checks, installed only by `?test=1`.
-if (new URLSearchParams(location.search).get('test') === '1') {
-  window.__pp = {
-    snapshot: () => latestSnapshot,
-    status: () => state,
-    target: () => selectedTarget,
-    workers: () => (run ? run.workers.filter((slot) => slot.ready).length : 0),
-    // `gallery(id)` waits for gallery.json and the wasm module, selects the entry as its button
-    // does and resolves to whether a run started.
-    galleryIds: () => [...galleryEntries.keys()],
-    gallery: async (id) => {
-      await Promise.all([galleryReady, wasmReady]);
-      return selectGalleryEntry(id);
-    },
-  };
-}
+})
+  .then(() => {
+    for (const target of JSON.parse(targets())) {
+      TARGETS.set(target.name, target);
+    }
+    if (!TARGETS.has(selectedTarget)) {
+      selectedTarget = TARGETS.keys().next().value;
+    }
+    renderTools();
+    wasmLoaded = true;
+    setStartEnabled(canStart());
+  })
+  .catch((e) => showInputError(`The WebAssembly module failed to load: ${errorMessage(e)}`));
+loadGallery();
 
 ui.form.addEventListener('submit', (event) => {
   event.preventDefault();
@@ -504,13 +487,12 @@ function renderGallery(gallery) {
   const groups = (gallery.groups ?? []).map((group, index) => {
     const list = document.createElement('ul');
     for (const entry of group.entries) {
-      galleryEntries.set(entry.id, entry);
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'gallery-entry';
       button.disabled = !canStart();
       button.append(entry.name, ' ', metaSpan(`${entry.digits} digits`));
-      button.addEventListener('click', () => selectGalleryEntry(entry.id));
+      button.addEventListener('click', () => selectGalleryEntry(entry));
       galleryButtons.push(button);
       const item = document.createElement('li');
       item.append(button);
@@ -537,21 +519,16 @@ function metaSpan(text) {
   return span;
 }
 
-// Fills the form from the gallery entry `id` and starts a run. Returns false, changing nothing,
-// while no run can start, and throws for an unknown id.
-function selectGalleryEntry(id) {
-  const entry = galleryEntries.get(id);
-  if (entry === undefined) {
-    throw new Error(`unknown gallery entry ${JSON.stringify(id)}`);
-  }
+// Fills the form from the gallery entry `entry` and starts a run (changing nothing while no run
+// can start).
+function selectGalleryEntry(entry) {
   if (!canStart()) {
-    return false;
+    return;
   }
   ui.n.value = entry.input === 'expr' ? entry.expr : entry.value;
   ui.hints.value = entry.hints ?? '';
   galleryHints = ui.hints.value;
   startRun(entry);
-  return true;
 }
 
 // The info line above the status, naming the gallery entry the run started from.

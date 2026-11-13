@@ -16,6 +16,7 @@ Building needs Rust through rustup (`rust-toolchain.toml` pins the release) and,
 - `cargo build --release` builds the command-line tool `target/release/primality-cert`.
 - `scripts/build-web.sh` builds the page into `dist/`, a static site to copy to any host.
   `scripts/build-web.sh --deploy user@host:/path/to/folder` also copies it there with `scp`.
+- `python scripts/serve.py` serves `dist/` at `http://localhost:8000/`.
 
 ## Run
 
@@ -43,13 +44,11 @@ page, `web/credits.html`, lists related projects.
 ## Test
 
 - `cargo test`, `cargo clippy --all-targets` and `cargo fmt --check`.
-- `node scripts/web-check.mjs` checks the page's logic without a browser. It needs Node 22 or
-  later and the wasm package from `scripts/build-web.sh`.
-- `python scripts/gallery/test_gallery.py` tests the gallery scripts.
-- `python scripts/browser-check.py --n 65537 --expect-file 65537.lean` checks the page in headless
-  Edge (`pip install playwright`) against a file the command-line tool wrote. It expects the page
-  served by `python scripts/serve.py`.
-- CI also compiles the Lean output for a few inputs against Mathlib master.
+- `python tests/certificates/check.py` runs the command-line tool on each input of
+  `tests/certificates/inputs.txt` and each gallery entry. It checks that every output is a
+  `primality` invocation proving `Nat.Prime` of its number, and writes them all into
+  `target/certificates.lean`, which `lake env lean` compiles in a Mathlib checkout. CI runs both
+  steps against Mathlib master on every push and weekly.
 
 ## Gallery
 
