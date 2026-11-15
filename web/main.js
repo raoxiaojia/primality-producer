@@ -326,9 +326,6 @@ function onWorkerMessage(slot, data) {
       requestRender();
       break;
     case 'result': {
-      // An `Error` outcome is how worker.js reports an exception, which for a Rust panic leaves
-      // the worker's wasm instance trapped. The driver ends the run on it, so that worker never
-      // gets another task.
       const stale = run.driver.submit(data.result);
       slot.taskId = null;
       slot.idle = true;
@@ -650,10 +647,6 @@ function renderStage(snapshot) {
   ui.searched.textContent = `Searched for factors up to ${searched} digits`;
 }
 
-// A rebuilt or re-inserted item loses any text selected in it, and the stage and curve count of an
-// open composite change several times a second during ECM. So an item is rebuilt only when its
-// prime's view changed apart from those, which are written in place, and only the items that
-// changed are swapped.
 function renderTree(snapshot) {
   const primes = snapshot ? snapshot.primes : [];
   ui.treeBox.hidden = primes.length === 0;
@@ -665,7 +658,6 @@ function renderTree(snapshot) {
       cached = { key, ...primeItem(prime) };
       run.treeItems.set(prime.value, cached);
     }
-    // Writing a text node, even with the same text, moves a selection end inside it.
     cached.counts.forEach((node, index) => {
       if (node === null) {
         return;

@@ -14,7 +14,7 @@ const MAX_EXPONENT: u32 = 10_000;
 /// the recursion of the parser, the printer and the tree's drop.
 const MAX_TOKENS: usize = 400;
 
-/// A numeral or expression longer than this many digits is shown shortened in error messages.
+/// A numeral or expression longer than this many digits is shown shortened in messages.
 const BRIEF_DIGITS: usize = 20;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -376,7 +376,7 @@ fn describe(token: &Token) -> String {
     }
 }
 
-fn brief(value: &BigUint) -> String {
+pub(crate) fn brief(value: &BigUint) -> String {
     brief_text(&value.to_string())
 }
 

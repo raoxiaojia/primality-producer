@@ -1,21 +1,12 @@
 #!/bin/sh
-# Builds the wasm package with wasm-pack and assembles dist/, the deployable static site. With
-# `--deploy user@host:/path/to/folder` it then copies dist/ there with scp. Runs under sh, bash or
-# Git Bash on Windows, from any directory.
+# Builds the wasm package with wasm-pack and assembles dist/, the deployable static site. Runs
+# under sh, bash or Git Bash on Windows, from any directory.
 
 set -eu
 
+[ $# -eq 0 ] || { echo "usage: $0" >&2; exit 2; }
 root=$(cd "$(dirname "$0")/.." && pwd)
 dist="$root/dist"
-deploy=
-case "${1:-}" in
-  --deploy)
-    [ $# -eq 2 ] || { echo "usage: $0 [--deploy user@host:/path/to/folder]" >&2; exit 2; }
-    deploy=$2
-    ;;
-  '') ;;
-  *) echo "usage: $0 [--deploy user@host:/path/to/folder]" >&2; exit 2 ;;
-esac
 
 cd "$root"
 wasm-pack build --target web --release --no-typescript --no-pack --out-dir web/pkg
@@ -40,17 +31,3 @@ echo "dist/ assembled:"
 (cd "$dist" && find . -type f | sort | while read -r file; do
   printf '%12s bytes  %s\n' "$(wc -c < "$file")" "${file#./}"
 done)
-
-if [ -n "$deploy" ]; then
-  echo "copying dist/ to $deploy"
-  # The pages and main.js go last, so that a visitor during the copy never loads a page whose
-  # versioned URLs name files not yet copied.
-  set --
-  for file in "$dist"/*; do
-    case ${file##*/} in
-      main.js | *.html) ;;
-      *) set -- "$@" "$file" ;;
-    esac
-  done
-  scp -r "$@" "$dist/main.js" "$dist"/*.html "$deploy"
-fi
