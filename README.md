@@ -42,7 +42,7 @@ The page takes `?n=…`, `?hints=…`, `?workers=…` and `?target=…` to prefi
 
 ## Test
 
-- `cargo test`, `cargo clippy --all-targets` and `cargo fmt --check`.
+- `cargo test` runs the unit tests.
 - `python tests/certificates/check.py` runs the command-line tool on each input of
   `tests/certificates/inputs.txt` and each gallery entry. It checks that every output is a
   `primality` invocation proving `Nat.Prime` of its number, and writes them all into

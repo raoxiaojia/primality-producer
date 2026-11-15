@@ -2,7 +2,7 @@
 //! `run_task`, which executes one task.
 
 use num_integer::Integer;
-use num_traits::{One, Zero};
+use num_traits::One;
 use serde::{Deserialize, Serialize};
 
 use crate::arith::{self, BigUint};
@@ -48,7 +48,8 @@ pub enum Task {
         curves: u32,
     },
     /// The smallest primitive root of the prime `q` with the distinct prime factors `factors` of
-    /// `q − 1`, among `2, …, bound`. A hinted root (`hint`, from a `q:a` hint) is tried first.
+    /// `q − 1` in ascending order, among `2, …, bound`. A hinted root (`hint`, a `q:a` hint that
+    /// `hints::parse_hints` reduced modulo `q`) is tried first.
     Root {
         id: u32,
         #[serde(with = "crate::arith::big_str")]
@@ -56,8 +57,7 @@ pub enum Task {
         #[serde(with = "crate::arith::big_str_vec")]
         factors: Vec<BigUint>,
         bound: u64,
-        #[serde(default, with = "crate::arith::big_str_opt")]
-        hint: Option<BigUint>,
+        hint: Option<u64>,
     },
     /// The independent check of the finished certificate by `verify::verify`, then the rendering
     /// of every target's text, which states the input as `term` (`input::Input::term`).
@@ -86,18 +86,17 @@ impl Task {
 /// The cofactor left by trial division in an `Analyze` task.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind")]
-pub enum Rest {
+pub enum Cofactor {
     One,
     Prime {
         #[serde(with = "crate::arith::big_str")]
         value: BigUint,
     },
-    /// `witness` is a Miller–Rabin base proving `value` composite (`None` for 0, which no base
-    /// proves).
+    /// `witness` is a Miller–Rabin base proving `value` composite.
     Composite {
         #[serde(with = "crate::arith::big_str")]
         value: BigUint,
-        witness: Option<u64>,
+        witness: u64,
     },
     Power {
         #[serde(with = "crate::arith::big_str")]
@@ -112,7 +111,7 @@ pub enum Rest {
 pub enum Outcome {
     Analyzed {
         small: Vec<(u64, u32)>,
-        rest: Rest,
+        cofactor: Cofactor,
     },
     /// A nontrivial divisor of the task's `m` (the driver checks it again).
     Divisor {
@@ -169,7 +168,7 @@ pub fn run_task(task: &Task, progress: &mut dyn FnMut(u32), stop: &dyn Fn() -> b
             hint,
             ..
         } => Outcome::Root {
-            root: primitive_root(q, factors, *bound, hint.as_ref()),
+            root: primitive_root(q, factors, *bound, *hint),
         },
         Task::Verify {
             cert,
@@ -189,24 +188,24 @@ pub fn run_task(task: &Task, progress: &mut dyn FnMut(u32), stop: &dyn Fn() -> b
 
 fn analyze(m: &BigUint, trial_bound: u32) -> Outcome {
     let (small, rest) = arith::trial_division(m, trial_bound);
-    let rest = if rest.is_one() {
-        Rest::One
+    let cofactor = if rest.is_one() {
+        Cofactor::One
     } else if arith::to_u64(&rest).is_some_and(|r| r >= 2 && r < u64::from(trial_bound).pow(2)) {
         // No prime below `trial_bound` divides the cofactor, so below `trial_bound²` it is prime.
-        Rest::Prime { value: rest }
+        Cofactor::Prime { value: rest }
     } else {
         match arith::miller_rabin(&rest) {
-            Ok(()) => Rest::Prime { value: rest },
+            Ok(()) => Cofactor::Prime { value: rest },
             Err(witness) => match arith::perfect_power(&rest) {
-                Some((base, exp)) => Rest::Power { base, exp },
-                None => Rest::Composite {
+                Some((base, exp)) => Cofactor::Power { base, exp },
+                None => Cofactor::Composite {
                     value: rest,
-                    witness: (witness != 0).then_some(witness),
+                    witness,
                 },
             },
         }
     };
-    Outcome::Analyzed { small, rest }
+    Outcome::Analyzed { small, cofactor }
 }
 
 /// Every target's Lean file for `cert`, once `verify::verify` accepts `cert` and `term` evaluates
@@ -255,45 +254,25 @@ fn run_ecm(
     Outcome::NoFactor
 }
 
-/// The largest integer a JavaScript number holds exactly. The page passes certificates through
-/// JSON numbers, which would round a larger root.
-const MAX_EXACT_JS_INTEGER: u64 = (1 << 53) - 1;
-
 /// The hint when it is a root, else the smallest root in `2..=bound` below `q`. A root is an `a`
 /// with `a^(q−1) ≡ 1` and `a^((q−1)/r) ≢ 1` modulo `q` for every `r` in `factors`, the distinct
-/// prime factors of `q − 1`. A prime `q` has its primitive roots as roots, and a composite `q`
-/// has none. The hint is reduced modulo `q` and skipped when the residue is above
-/// `MAX_EXACT_JS_INTEGER`.
+/// prime factors of `q − 1` in ascending order. A prime `q` has its primitive roots as roots, and
+/// a composite `q` has none.
 ///
 /// The search drops a candidate at its first failing factor, in ascending order. For the factor
 /// 2 it tests `(a | q) = -1`, which for a prime `q` is `a^((q−1)/2) ≢ 1` (Euler's criterion) at
 /// the cost of a gcd. The first candidate passing every factor is returned if `a^(q−1) ≡ 1`.
 /// Otherwise `q` is composite and the search ends with no root. For a composite `q` the Jacobi
 /// test can pass where the power test fails, so a returned candidate need not be a root.
-fn primitive_root(
-    q: &BigUint,
-    factors: &[BigUint],
-    bound: u64,
-    hint: Option<&BigUint>,
-) -> Option<u64> {
+fn primitive_root(q: &BigUint, factors: &[BigUint], bound: u64, hint: Option<u64>) -> Option<u64> {
     if q.bits() < 2 {
         return None; // `q < 2` has no residues to test
     }
     let q_minus_1 = q - 1u32;
-    let mut factors: Vec<BigUint> = factors.iter().filter(|r| !r.is_zero()).cloned().collect();
-    factors.sort();
-    factors.dedup();
-    let hint = hint.map(|a| a % q);
-    if let Some(a) = hint
-        .as_ref()
-        .and_then(arith::to_u64)
-        .filter(|&a| a <= MAX_EXACT_JS_INTEGER)
-    {
-        if a >= 2 {
-            let (powers, full) = arith::lucas_powers(&BigUint::from(a), q, &factors);
-            if full.is_one() && powers.iter().all(|p| !p.is_one()) {
-                return Some(a);
-            }
+    if let Some(a) = hint {
+        let (powers, full) = arith::lucas_powers(&BigUint::from(a), q, factors);
+        if full.is_one() && powers.iter().all(|p| !p.is_one()) {
+            return Some(a);
         }
     }
     let top = arith::to_u64(&q_minus_1).map_or(bound, |q1| q1.min(bound));
@@ -353,7 +332,7 @@ mod tests {
             analyze("1000001", 65_536),
             Outcome::Analyzed {
                 small: vec![(101, 1), (9901, 1)],
-                rest: Rest::One
+                cofactor: Cofactor::One
             }
         );
         // 65537 is below the trial bound, so it is a small prime with the cofactor 1.
@@ -361,7 +340,7 @@ mod tests {
             analyze("65537", 100_000),
             Outcome::Analyzed {
                 small: vec![(65537, 1)],
-                rest: Rest::One
+                cofactor: Cofactor::One
             }
         );
         // A cofactor below `trial_bound²` is prime without a test.
@@ -369,7 +348,7 @@ mod tests {
             analyze("4294967291", 65_536), // 2^32 - 5
             Outcome::Analyzed {
                 small: vec![],
-                rest: Rest::Prime {
+                cofactor: Cofactor::Prime {
                     value: big("4294967291")
                 }
             }
@@ -379,14 +358,14 @@ mod tests {
             analyze(m127, 65_536),
             Outcome::Analyzed {
                 small: vec![],
-                rest: Rest::Prime { value: big(m127) }
+                cofactor: Cofactor::Prime { value: big(m127) }
             }
         );
         assert_eq!(
             analyze("1000006000009", 1000), // 1000003^2
             Outcome::Analyzed {
                 small: vec![],
-                rest: Rest::Power {
+                cofactor: Cofactor::Power {
                     base: big("1000003"),
                     exp: 2
                 }
@@ -397,33 +376,28 @@ mod tests {
             analyze("3215031751", 100),
             Outcome::Analyzed {
                 small: vec![],
-                rest: Rest::Composite {
+                cofactor: Cofactor::Composite {
                     value: big("3215031751"),
-                    witness: Some(11)
+                    witness: 11
                 }
             }
         );
-        let Outcome::Analyzed { small, rest } = analyze("1000000000100000000002379", 65_536) else {
+        let Outcome::Analyzed { small, cofactor } = analyze("1000000000100000000002379", 65_536)
+        else {
             panic!("not analyzed");
         };
         assert!(small.is_empty());
-        assert!(matches!(
-            rest,
-            Rest::Composite {
-                witness: Some(_),
-                ..
-            }
-        ));
+        assert!(matches!(cofactor, Cofactor::Composite { .. }));
         assert_eq!(
             analyze("1", 100),
             Outcome::Analyzed {
                 small: vec![],
-                rest: Rest::One
+                cofactor: Cofactor::One
             }
         );
     }
 
-    fn root_task(q: &str, factors: &[u64], bound: u64, hint: Option<BigUint>) -> Task {
+    fn root_task(q: &str, factors: &[u64], bound: u64, hint: Option<u64>) -> Task {
         Task::Root {
             id: 6,
             q: big(q),
@@ -435,46 +409,28 @@ mod tests {
 
     #[test]
     fn a_hinted_root_is_tried_first_and_a_wrong_one_falls_back_to_the_search() {
-        let root = |q: &str, factors: &[u64], hint: &str| {
-            run(root_task(q, factors, 100_000, Some(big(hint))))
-        };
+        let root =
+            |q: &str, factors: &[u64], hint: u64| run(root_task(q, factors, 100_000, Some(hint)));
         // 5 is a primitive root of 65537 but not the smallest, 3.
-        assert_eq!(root("65537", &[2], "5"), Outcome::Root { root: Some(5) });
+        assert_eq!(root("65537", &[2], 5), Outcome::Root { root: Some(5) });
         // 4 is a square, so not a root: the search from 2 finds 3.
-        assert_eq!(root("65537", &[2], "4"), Outcome::Root { root: Some(3) });
-        for bad in ["0", "1", "65537"] {
-            assert_eq!(
-                root("65537", &[2], bad),
-                Outcome::Root { root: Some(3) },
-                "{bad}"
-            );
-        }
-        // A hint is reduced modulo `q`, even one beyond `u64`.
+        assert_eq!(root("65537", &[2], 4), Outcome::Root { root: Some(3) });
         assert_eq!(
-            root("65537", &[2], "65542"),
-            Outcome::Root { root: Some(5) }
-        );
-        let huge = big("65537") * BigUint::from(u64::MAX) + 5u32;
-        assert_eq!(
-            run(root_task("65537", &[2], 100_000, Some(huge))),
-            Outcome::Root { root: Some(5) }
-        );
-        assert_eq!(
-            root("1289", &[2, 7, 23], "6"),
+            root("1289", &[2, 7, 23], 6),
             Outcome::Root { root: Some(6) }
         );
         // A composite has no root, hinted or not.
         assert_eq!(
-            root("1022117", &[2, 255529], "2"),
+            root("1022117", &[2, 255529], 2),
             Outcome::Root { root: None }
         );
         // The hint is tried even when the search bound rules the search out.
         assert_eq!(
-            run(root_task("65537", &[2], 2, Some(big("5")))),
+            run(root_task("65537", &[2], 2, Some(5))),
             Outcome::Root { root: Some(5) }
         );
-        // A large prime: the hinted root 43 (its smallest) and 53 are accepted, the square 4
-        // falls back to the search, and so does the root 43^11, which is above 2^53.
+        // A large prime: the hinted root 43 (its smallest) and 53 are accepted, and the square 4
+        // falls back to the search.
         let m127 = "170141183460469231731687303715884105727";
         let factors = [
             2,
@@ -490,12 +446,7 @@ mod tests {
             649657,
             77158673929,
         ];
-        for (hint, expected) in [
-            ("43", 43),
-            ("53", 53),
-            ("4", 43),
-            ("929293739471222707", 43),
-        ] {
+        for (hint, expected) in [(43, 43), (53, 53), (4, 43)] {
             assert_eq!(
                 root(m127, &factors, hint),
                 Outcome::Root {

@@ -36,7 +36,7 @@
    "id": "p256-p",
    "group": "Elliptic-curve standards",
    "name": "NIST P-256 field prime",
-   "ref": "FIPS 186-4",
+   "ref": "NIST SP 800-186",
    "expr": "2^256 - 2^224 + 2^192 + 2^96 - 1",
    "source": "factordb, 2026-11-03; tree verified by primality-producer"
   },
@@ -44,7 +44,7 @@
    "id": "p384-p",
    "group": "Elliptic-curve standards",
    "name": "NIST P-384 field prime",
-   "ref": "FIPS 186-4",
+   "ref": "NIST SP 800-186",
    "expr": "2^384 - 2^128 - 2^96 + 2^32 - 1",
    "source": "factordb, 2026-11-03; tree verified by primality-producer"
   },

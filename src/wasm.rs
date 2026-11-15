@@ -8,7 +8,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::driver::{Config, Driver};
 use crate::hints::parse_hints;
-use crate::task::{self, Outcome, Task, TaskResult};
+use crate::task::{self, Task, TaskResult};
 
 thread_local! {
     /// The message of the last panic, stored by the hook `start` installs.
@@ -92,28 +92,22 @@ pub fn targets() -> String {
 }
 
 /// Runs the JSON `Task` in `task_json` and returns its `TaskResult` as JSON. `progress(done)` is
-/// called after each ECM curve. Unparsable input gives an `Error` outcome with id 0.
+/// called after each ECM curve. Unparsable input throws.
 #[wasm_bindgen]
-pub fn run_task(task_json: &str, progress: &Function) -> String {
-    let result = match serde_json::from_str::<Task>(task_json) {
-        // A worker cannot read a stop signal during a task, so the page replaces a worker
-        // instead of stopping its task.
-        Ok(task) => task::run_task(
-            &task,
-            &mut |done| {
-                // A throwing callback must not abort the task.
-                let _ = progress.call1(&JsValue::NULL, &JsValue::from(done));
-            },
-            &|| false,
-        ),
-        Err(e) => TaskResult {
-            id: 0,
-            outcome: Outcome::Error {
-                message: format!("invalid task: {e}"),
-            },
+pub fn run_task(task_json: &str, progress: &Function) -> Result<String, JsError> {
+    let task: Task =
+        serde_json::from_str(task_json).map_err(|e| JsError::new(&format!("invalid task: {e}")))?;
+    // A worker cannot read a stop signal during a task, so the page replaces a worker instead of
+    // stopping its task.
+    let result = task::run_task(
+        &task,
+        &mut |done| {
+            // A throwing callback must not abort the task.
+            let _ = progress.call1(&JsValue::NULL, &JsValue::from(done));
         },
-    };
-    to_json(&result)
+        &|| false,
+    );
+    Ok(to_json(&result))
 }
 
 fn to_json<T: serde::Serialize>(value: &T) -> String {

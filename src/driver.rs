@@ -1,4 +1,4 @@
-//! The state machine: the tree of primes, the open composites with their level-synchronous
+//! The state machine: the tree of primes, the open composites with their stage-synchronous
 //! schedule, and the snapshot the front ends render.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -11,7 +11,7 @@ use crate::ecm::{self, EcmLevel};
 use crate::hints::{render_hints, Hints};
 use crate::input::{parse_input, Input};
 use crate::targets::Output;
-use crate::task::{self, Outcome, Rest, Task, TaskResult};
+use crate::task::{self, Cofactor, Outcome, Task, TaskResult};
 use crate::verify::{check_witness_bound, Certificate, Entry, MAX_WITNESS_BOUND};
 
 /// The parameters of a run. `Default` gives the production values.
@@ -31,8 +31,6 @@ pub struct Config {
     pub pm1_b2: u64,
     /// The ECM levels in order.
     pub ecm_levels: Vec<EcmLevel>,
-    /// The number of ECM levels to run (all when `None`).
-    pub max_ecm_levels: Option<usize>,
     /// Primitive roots are searched among `2, …, root_bound`.
     pub root_bound: u64,
     /// The maximal number of decimal digits of the input.
@@ -49,16 +47,16 @@ impl Default for Config {
             pm1_b1: 100_000,
             pm1_b2: 10_000_000,
             ecm_levels: ecm::default_levels(),
-            max_ecm_levels: None,
             root_bound: 100_000,
             max_digits: 1000,
         }
     }
 }
 
-/// An open composite as the page shows it.
+/// An open part of `q - 1` as the page shows it, an open composite or a part under analysis
+/// (`stage` "analyzing").
 #[derive(Clone, Debug, Serialize)]
-pub struct CompositeView {
+pub struct PartView {
     pub value: String,
     pub digits: usize,
     pub stage: String,
@@ -76,12 +74,12 @@ pub struct PrimeView {
     pub state: String,
     pub root: Option<u64>,
     pub factors: Vec<String>,
-    pub open: Vec<CompositeView>,
+    pub open: Vec<PartView>,
 }
 
 /// The lowest stage any open composite is at, with the work summed over the composites at it.
 #[derive(Clone, Debug, Serialize)]
-pub struct LevelView {
+pub struct StageView {
     pub name: String,
     pub done: u32,
     pub total: u32,
@@ -100,7 +98,7 @@ pub struct Snapshot {
     /// Entries `≥ witness_bound`, input first, then descending.
     pub primes: Vec<PrimeView>,
     /// `None` while no composite is open.
-    pub level: Option<LevelView>,
+    pub stage: Option<StageView>,
     /// Every open composite has finished the ECM level for this many digits (0 before).
     pub searched_digits: u32,
     pub open_composites: usize,
@@ -256,11 +254,11 @@ pub struct Driver {
     n: BigUint,
     /// The input as the Lean term the certificates state (`Input::term`).
     term: String,
-    /// The factor hints, ascending and distinct, each at least 2.
-    hints: Vec<BigUint>,
+    /// The factor hints, each at least 2.
+    hints: BTreeSet<BigUint>,
     hints_used: BTreeSet<BigUint>,
     /// A primitive root to try first, for each prime a root hint names.
-    root_hints: BTreeMap<BigUint, BigUint>,
+    root_hints: BTreeMap<BigUint, u64>,
     status: Status,
     /// The message of a finished run.
     message: String,
@@ -280,20 +278,13 @@ impl Driver {
     pub fn new(n: &str, hints: Hints, config: Config) -> Result<Driver, String> {
         check_witness_bound(config.witness_bound)?;
         let Input { n: value, term, .. } = parse_input(n, config.max_digits)?;
-        let Hints { factors, roots } = hints;
-        let mut hints: Vec<BigUint> = factors
-            .into_iter()
-            .filter(|h| *h >= BigUint::from(2u32))
-            .collect();
-        hints.sort();
-        hints.dedup();
         let mut driver = Driver {
             config,
             n: value,
             term,
-            hints,
+            hints: hints.factors,
             hints_used: BTreeSet::new(),
-            root_hints: roots,
+            root_hints: hints.roots,
             status: Status::Running,
             message: String::new(),
             outputs: Vec::new(),
@@ -366,8 +357,8 @@ impl Driver {
             return Vec::new();
         }
         match (work, result.outcome) {
-            (Work::Analyze { m, parents }, Outcome::Analyzed { small, rest }) => {
-                self.on_analyzed(&m, parents, &small, &rest);
+            (Work::Analyze { m, parents }, Outcome::Analyzed { small, cofactor }) => {
+                self.on_analyzed(&m, parents, &small, &cofactor);
             }
             (Work::Factor { m }, Outcome::Divisor { d }) => self.on_divisor(id, &m, &d),
             (Work::Factor { m }, Outcome::NoFactor) => self.on_no_factor(id, &m),
@@ -418,7 +409,7 @@ impl Driver {
         let mut order: Vec<&BigUint> = self.nodes.keys().collect();
         order.reverse();
         let primes = order.into_iter().map(|q| self.prime_view(q)).collect();
-        let (level, searched_digits) = self.level_view();
+        let (stage, searched_digits) = self.stage_view();
         let message = if self.status == Status::Running {
             self.running_message()
         } else {
@@ -429,7 +420,7 @@ impl Driver {
             message,
             input: self.n.to_string(),
             primes,
-            level,
+            stage,
             searched_digits,
             open_composites: self.composites.len(),
             tasks_in_flight: self.in_flight.len(),
@@ -478,15 +469,16 @@ impl Driver {
     /// Reports an input below 2 or one split by a hint, and otherwise queues its analysis.
     fn start(&mut self) {
         let n = self.n.clone();
+        let divisor = self.dividing_hints(&n).next().cloned();
         if n < BigUint::from(2u32) {
             self.end(Status::Composite, format!("{n} is not prime"));
-        } else if let Some(h) = self.hint_divisor(&n) {
+        } else if let Some(h) = divisor {
             self.hints_used.insert(h.clone());
             self.end(Status::Composite, split_message(&n, &h, &(&n / &h)));
         } else {
             // A hint naming the input carries its root (a gallery entry stores `n:root`), so it
             // counts as used rather than as dividing nothing.
-            if self.hints.binary_search(&n).is_ok() {
+            if self.hints.contains(&n) {
                 self.hints_used.insert(n.clone());
             }
             self.push_analyze(n, Parents::Input);
@@ -516,12 +508,9 @@ impl Driver {
         *p >= BigUint::from(self.config.witness_bound)
     }
 
-    /// The smallest hint `h` with `1 < h < m` dividing `m`.
-    fn hint_divisor(&self, m: &BigUint) -> Option<BigUint> {
-        self.hints
-            .iter()
-            .find(|h| **h < *m && (m % *h).is_zero())
-            .cloned()
+    /// The hints `h` with `1 < h < m` dividing `m`, ascending.
+    fn dividing_hints<'a>(&'a self, m: &'a BigUint) -> impl Iterator<Item = &'a BigUint> {
+        self.hints.range(..m).filter(move |h| (m % *h).is_zero())
     }
 
     /// Adds `m`, a divisor of `parent - 1`, to the tree. The smallest hint dividing `m` splits it
@@ -534,15 +523,10 @@ impl Driver {
         // A hint equal to `m` cannot split it but names a factor of `parent - 1`, so it counts as
         // used. Otherwise the largest hint of a complete factorization would be reported as
         // dividing nothing.
-        if self.hints.binary_search(&m).is_ok() {
+        if self.hints.contains(&m) {
             self.hints_used.insert(m.clone());
         }
-        let dividing: Vec<BigUint> = self
-            .hints
-            .iter()
-            .filter(|h| **h < m && (&m % *h).is_zero())
-            .cloned()
-            .collect();
+        let dividing: Vec<BigUint> = self.dividing_hints(&m).cloned().collect();
         if let Some(h) = dividing.first().cloned() {
             // The split by the smallest hint divides out its maximal power, which takes a larger
             // hint sharing a prime factor with it (4 and 8) along before that hint could split
@@ -637,12 +621,6 @@ impl Driver {
         self.enter_stage(&m, 0);
     }
 
-    /// The number of ECM levels the run goes through.
-    fn ecm_level_count(&self) -> usize {
-        let all = self.config.ecm_levels.len();
-        self.config.max_ecm_levels.map_or(all, |cap| cap.min(all))
-    }
-
     /// The stage with this index of the schedule, or `None` past the last one.
     fn stage_kind(&self, stage: usize) -> Option<StageKind> {
         let rho_tasks = self.config.rho_tasks as usize;
@@ -654,7 +632,7 @@ impl Driver {
             Some(StageKind::Pm1)
         } else {
             let level = stage - rho_tasks - 1;
-            (level < self.ecm_level_count()).then_some(StageKind::Ecm { level })
+            (level < self.config.ecm_levels.len()).then_some(StageKind::Ecm { level })
         }
     }
 
@@ -664,11 +642,8 @@ impl Driver {
         let mut stage = stage;
         loop {
             let Some(kind) = self.stage_kind(stage) else {
-                let message = match self.ecm_level_count().checked_sub(1) {
-                    Some(last) => format!(
-                        "no factor found up to ECM level {} digits",
-                        self.config.ecm_levels[last].digits
-                    ),
+                let message = match self.config.ecm_levels.last() {
+                    Some(last) => format!("no factor found up to ECM level {} digits", last.digits),
                     None => {
                         "no factor found by Pollard rho and p-1 (no ECM level enabled)".to_string()
                     }
@@ -706,7 +681,7 @@ impl Driver {
                     q: q.clone(),
                     factors: node.factors.iter().cloned().collect(),
                     bound: self.config.root_bound,
-                    hint: self.root_hints.get(q).cloned(),
+                    hint: self.root_hints.get(q).copied(),
                 })
             }
             Work::Verify { cert } => Some(Task::Verify {
@@ -761,8 +736,14 @@ impl Driver {
     }
 
     /// Takes an `Analyze` result after checking that its parts multiply back to `m`.
-    fn on_analyzed(&mut self, m: &BigUint, parents: Parents, small: &[(u64, u32)], rest: &Rest) {
-        let mut product = rest_value(rest);
+    fn on_analyzed(
+        &mut self,
+        m: &BigUint,
+        parents: Parents,
+        small: &[(u64, u32)],
+        cofactor: &Cofactor,
+    ) {
+        let mut product = cofactor_value(cofactor);
         for &(p, e) in small {
             product *= BigUint::from(p).pow(e);
         }
@@ -774,7 +755,7 @@ impl Driver {
             return;
         }
         match parents {
-            Parents::Input => self.on_input_analyzed(small, rest),
+            Parents::Input => self.on_input_analyzed(small, cofactor),
             Parents::Nodes(set) => {
                 if set.is_empty() {
                     return;
@@ -782,11 +763,11 @@ impl Driver {
                 for &(p, _) in small {
                     self.add_prime(BigUint::from(p), &set);
                 }
-                match rest {
-                    Rest::One => {}
-                    Rest::Prime { value } => self.add_prime(value.clone(), &set),
-                    Rest::Composite { value, .. } => self.add_composite(value.clone(), &set),
-                    Rest::Power { base, .. } => {
+                match cofactor {
+                    Cofactor::One => {}
+                    Cofactor::Prime { value } => self.add_prime(value.clone(), &set),
+                    Cofactor::Composite { value, .. } => self.add_composite(value.clone(), &set),
+                    Cofactor::Power { base, .. } => {
                         for parent in &set {
                             self.add_part(base.clone(), parent, false);
                         }
@@ -797,35 +778,26 @@ impl Driver {
     }
 
     /// Makes a prime input the root of the tree, or reports why it is composite.
-    fn on_input_analyzed(&mut self, small: &[(u64, u32)], rest: &Rest) {
+    fn on_input_analyzed(&mut self, small: &[(u64, u32)], cofactor: &Cofactor) {
         let n = self.n.clone();
-        let prime = match (small, rest) {
-            ([], Rest::Prime { value }) => *value == n,
-            ([(p, 1)], Rest::One) => BigUint::from(*p) == n,
+        let prime = match (small, cofactor) {
+            ([], Cofactor::Prime { value }) => *value == n,
+            ([(p, 1)], Cofactor::One) => BigUint::from(*p) == n,
             _ => false,
         };
         if prime {
-            if self.needs_witness(&n) {
-                let node = Node {
-                    parents: BTreeSet::new(),
-                    factors: BTreeSet::new(),
-                    root: None,
-                    root_task: None,
-                };
-                self.nodes.insert(n.clone(), node);
-                self.add_part(&n - 1u32, &n, false);
-            }
+            self.add_prime(n, &BTreeSet::new());
             return;
         }
         let message = if let Some(&(p, _)) = small.first() {
             let d = BigUint::from(p);
             split_message(&n, &d, &(&n / &d))
         } else {
-            match rest {
-                Rest::Composite {
-                    witness: Some(a), ..
-                } => format!("Miller–Rabin base {a} shows {n} is composite"),
-                Rest::Power { base, exp } => format!("{n} = {base}^{exp}"),
+            match cofactor {
+                Cofactor::Composite { witness, .. } => {
+                    format!("Miller–Rabin base {witness} shows {n} is composite")
+                }
+                Cofactor::Power { base, exp } => format!("{n} = {base}^{exp}"),
                 _ => format!("{n} is composite"),
             }
         };
@@ -1007,13 +979,9 @@ impl Driver {
         if self.nodes.values().any(|node| node.root.is_none()) {
             return;
         }
-        match self.build_certificate() {
-            Ok(cert) => {
-                let id = self.fresh_id();
-                self.queue.push_back((id, Work::Verify { cert }));
-            }
-            Err(message) => self.end(Status::Failed, message),
-        }
+        let cert = self.build_certificate();
+        let id = self.fresh_id();
+        self.queue.push_back((id, Work::Verify { cert }));
     }
 
     /// Keeps the texts of the checked certificate and ends the run as certified.
@@ -1041,42 +1009,27 @@ impl Driver {
             .chain(self.in_flight.values())
     }
 
-    /// The certificate with an entry for each prime reachable from the input, the input first,
-    /// then descending.
-    fn build_certificate(&self) -> Result<Certificate, String> {
-        let mut entries = Vec::new();
-        if self.nodes.contains_key(&self.n) {
-            let mut seen = BTreeSet::new();
-            let mut stack = vec![self.n.clone()];
-            while let Some(q) = stack.pop() {
-                if !seen.insert(q.clone()) {
-                    continue;
-                }
-                if let Some(node) = self.nodes.get(&q) {
-                    stack.extend(
-                        node.factors
-                            .iter()
-                            .filter(|f| self.nodes.contains_key(*f))
-                            .cloned(),
-                    );
-                }
-            }
-            for q in seen.iter().rev() {
-                let node = &self.nodes[q];
-                let root = node
-                    .root
-                    .ok_or_else(|| format!("internal error: {q} has no primitive root"))?;
-                entries.push(Entry {
+    /// The certificate with an entry for each prime of the tree, the input first, then
+    /// descending. Every prime of the tree is reachable from the input (`detach_node` removes a
+    /// prime with its last parent) and has its root (`try_finish` checks), and `verify` rejects a
+    /// certificate where either fails.
+    fn build_certificate(&self) -> Certificate {
+        let entries = self
+            .nodes
+            .iter()
+            .rev()
+            .filter_map(|(q, node)| {
+                Some(Entry {
                     q: q.clone(),
-                    root,
+                    root: node.root?,
                     factors: node.factors.iter().cloned().collect(),
-                });
-            }
-        }
-        Ok(Certificate {
+                })
+            })
+            .collect();
+        Certificate {
             n: self.n.clone(),
             entries,
-        })
+        }
     }
 
     fn prime_view(&self, q: &BigUint) -> PrimeView {
@@ -1097,7 +1050,7 @@ impl Driver {
             _ => None,
         });
         for m in analyzing {
-            open.push(CompositeView {
+            open.push(PartView {
                 value: m.to_string(),
                 digits: arith::digits(m),
                 stage: "analyzing".to_string(),
@@ -1108,7 +1061,7 @@ impl Driver {
         for (m, composite) in &self.composites {
             if composite.parents.contains(q) {
                 let (done, total) = composite.progress();
-                open.push(CompositeView {
+                open.push(PartView {
                     value: m.to_string(),
                     digits: arith::digits(m),
                     stage: self.stage_name(composite.kind),
@@ -1127,8 +1080,8 @@ impl Driver {
         }
     }
 
-    /// The snapshot's `level` and `searched_digits`.
-    fn level_view(&self) -> (Option<LevelView>, u32) {
+    /// The snapshot's `stage` and `searched_digits`.
+    fn stage_view(&self) -> (Option<StageView>, u32) {
         let Some(stage) = self.composites.values().map(|c| c.stage).min() else {
             return (None, 0);
         };
@@ -1141,8 +1094,8 @@ impl Driver {
             total += t;
             kind = Some(composite.kind);
         }
-        let level = kind.map(|kind| LevelView {
-            name: self.level_name(kind),
+        let view = kind.map(|kind| StageView {
+            name: self.stage_view_name(kind),
             done,
             total,
             unit: if matches!(kind, StageKind::Ecm { .. }) {
@@ -1163,7 +1116,7 @@ impl Driver {
             .checked_sub(1)
             .and_then(|last| self.config.ecm_levels.get(last))
             .map_or(0, |level| level.digits);
-        (level, searched)
+        (view, searched)
     }
 
     /// The message of a running snapshot. The front ends append the composite and task counts.
@@ -1177,7 +1130,7 @@ impl Driver {
         }
     }
 
-    /// The stage name of a composite view.
+    /// The stage name of a part view.
     fn stage_name(&self, kind: StageKind) -> String {
         match kind {
             StageKind::Rho { .. } => "rho".to_string(),
@@ -1189,8 +1142,8 @@ impl Driver {
         }
     }
 
-    /// The name of a level view.
-    fn level_name(&self, kind: StageKind) -> String {
+    /// The name of a stage view.
+    fn stage_view_name(&self, kind: StageKind) -> String {
         match kind {
             StageKind::Rho { c } => format!("Pollard rho (c = {c})"),
             StageKind::Pm1 => format!("Pollard p-1 (B1 = {})", self.config.pm1_b1),
@@ -1263,11 +1216,11 @@ fn factor_task(config: &Config, kind: StageKind, m: &BigUint, slot: &Slot, id: u
 }
 
 /// The cofactor an `Analyze` result describes, as a number.
-fn rest_value(rest: &Rest) -> BigUint {
-    match rest {
-        Rest::One => BigUint::one(),
-        Rest::Prime { value } | Rest::Composite { value, .. } => value.clone(),
-        Rest::Power { base, exp } => base.pow(*exp),
+fn cofactor_value(cofactor: &Cofactor) -> BigUint {
+    match cofactor {
+        Cofactor::One => BigUint::one(),
+        Cofactor::Prime { value } | Cofactor::Composite { value, .. } => value.clone(),
+        Cofactor::Power { base, exp } => base.pow(*exp),
     }
 }
 
@@ -1437,21 +1390,21 @@ mod tests {
         }
     }
 
-    fn analyzed(small: &[(u64, u32)], rest: Rest) -> Outcome {
+    fn analyzed(small: &[(u64, u32)], cofactor: Cofactor) -> Outcome {
         Outcome::Analyzed {
             small: small.to_vec(),
-            rest,
+            cofactor,
         }
     }
 
-    fn prime(s: &str) -> Rest {
-        Rest::Prime { value: big(s) }
+    fn prime(s: &str) -> Cofactor {
+        Cofactor::Prime { value: big(s) }
     }
 
-    fn composite(s: &str) -> Rest {
-        Rest::Composite {
+    fn composite(s: &str) -> Cofactor {
+        Cofactor::Composite {
             value: big(s),
-            witness: Some(2),
+            witness: 2,
         }
     }
 
@@ -1479,7 +1432,7 @@ mod tests {
         Config {
             witness_bound: 1000,
             trial_bound: 100,
-            max_ecm_levels: Some(2),
+            ecm_levels: ecm::default_levels()[..2].to_vec(),
             ..Config::default()
         }
     }
@@ -1502,12 +1455,12 @@ mod tests {
             .add(
                 "Analyze",
                 "1008",
-                analyzed(&[(2, 4), (3, 2), (7, 1)], Rest::One),
+                analyzed(&[(2, 4), (3, 2), (7, 1)], Cofactor::One),
             )
             .add(
                 "Analyze",
                 "1012",
-                analyzed(&[(2, 2), (11, 1), (23, 1)], Rest::One),
+                analyzed(&[(2, 2), (11, 1), (23, 1)], Cofactor::One),
             )
             .add("Root", "1009", root(11))
             .add("Root", "1013", root(3))
@@ -1536,7 +1489,7 @@ mod tests {
         let mut table = Table::new();
         table
             .add("Analyze", "65537", analyzed(&[], prime("65537")))
-            .add("Analyze", "2", analyzed(&[(2, 1)], Rest::One))
+            .add("Analyze", "2", analyzed(&[(2, 1)], Cofactor::One))
             .add("Root", "65537", root(3));
         let snap = table.run(&mut driver("65537", &["2"], Config::default()));
         assert_eq!(snap.status, "certified");
@@ -1590,7 +1543,7 @@ mod tests {
             .add(
                 "Analyze",
                 "1008",
-                analyzed(&[(2, 4), (3, 2), (7, 1)], Rest::One),
+                analyzed(&[(2, 4), (3, 2), (7, 1)], Cofactor::One),
             );
         for _ in 0..5 {
             t.add("Ecm", C6, no_factor());
@@ -1601,12 +1554,12 @@ mod tests {
             .add(
                 "Analyze",
                 "1012",
-                analyzed(&[(2, 2), (11, 1), (23, 1)], Rest::One),
+                analyzed(&[(2, 2), (11, 1), (23, 1)], Cofactor::One),
             )
             .add(
                 "Analyze",
                 "1092",
-                analyzed(&[(2, 2), (3, 1), (7, 1), (13, 1)], Rest::One),
+                analyzed(&[(2, 2), (3, 1), (7, 1), (13, 1)], Cofactor::One),
             );
         for _ in 0..5 {
             t.add("Ecm", C3, no_factor());
@@ -1614,19 +1567,23 @@ mod tests {
         t.add("Ecm", C3, divisor("1019"))
             .add("Analyze", "1019", analyzed(&[], prime("1019")))
             .add("Analyze", C4, analyzed(&[], composite(C4)))
-            .add("Analyze", "1018", analyzed(&[(2, 1), (509, 1)], Rest::One))
+            .add(
+                "Analyze",
+                "1018",
+                analyzed(&[(2, 1), (509, 1)], Cofactor::One),
+            )
             .add("Rho", C4, divisor("1031"))
             .add("Analyze", "1031", analyzed(&[], prime("1031")))
             .add("Analyze", "1087", analyzed(&[], prime("1087")))
             .add(
                 "Analyze",
                 "1030",
-                analyzed(&[(2, 1), (5, 1), (103, 1)], Rest::One),
+                analyzed(&[(2, 1), (5, 1), (103, 1)], Cofactor::One),
             )
             .add(
                 "Analyze",
                 "1086",
-                analyzed(&[(2, 1), (3, 1), (181, 1)], Rest::One),
+                analyzed(&[(2, 1), (3, 1), (181, 1)], Cofactor::One),
             )
             .add("Root", N2, root(2))
             .add("Root", P1, root(2))
@@ -1658,14 +1615,14 @@ mod tests {
             .all(|t| matches!(t, Task::Ecm { b1: 2000, .. })));
         assert!(d.take_tasks(1).is_empty());
         assert_eq!(d.snapshot().tasks_in_flight, 10);
-        let level = d.snapshot().level.expect("a level");
-        assert_eq!((level.done, level.total), (0, 50));
+        let stage = d.snapshot().stage.expect("a stage");
+        assert_eq!((stage.done, stage.total), (0, 50));
         // Progress reports move the counts, capped at the task's curves.
         d.report_progress(tasks[0].id(), 3);
         d.report_progress(tasks[1].id(), 99);
         d.report_progress(4_000_000, 7);
         let snap = d.snapshot();
-        assert_eq!(snap.level.expect("a level").done, 8);
+        assert_eq!(snap.stage.expect("a stage").done, 8);
         assert_eq!(snap.primes[1].open[0].done, 8);
         assert_eq!(snap.primes[1].open[0].stage, "ecm 15 digits (B1 = 2000)");
         for task in &tasks {
@@ -1709,12 +1666,16 @@ mod tests {
             assert_eq!(snap.message, format!("{n} is not prime"));
         }
         let mut table = Table::new();
-        table.add("Analyze", C1, analyzed(&[(1009, 1), (1013, 1)], Rest::One));
+        table.add(
+            "Analyze",
+            C1,
+            analyzed(&[(1009, 1), (1013, 1)], Cofactor::One),
+        );
         let snap = table.run(&mut driver(C1, &[], Config::default()));
         assert_eq!(snap.status, "composite");
         assert_eq!(snap.message, "1022117 = 1009 × 1013");
         let mut table = Table::new();
-        table.add("Analyze", "1024", analyzed(&[(2, 10)], Rest::One));
+        table.add("Analyze", "1024", analyzed(&[(2, 10)], Cofactor::One));
         assert_eq!(
             table
                 .run(&mut driver("1024", &[], Config::default()))
@@ -1736,9 +1697,9 @@ mod tests {
             big_composite,
             analyzed(
                 &[],
-                Rest::Composite {
+                Cofactor::Composite {
                     value: big(big_composite),
-                    witness: Some(2),
+                    witness: 2,
                 },
             ),
         );
@@ -1754,7 +1715,7 @@ mod tests {
             "1000006000009",
             analyzed(
                 &[],
-                Rest::Power {
+                Cofactor::Power {
                     base: big("1000003"),
                     exp: 2,
                 },
@@ -1790,7 +1751,7 @@ mod tests {
                 analyzed(&[(2, 15)], composite(C1)),
             );
             let config = Config {
-                max_ecm_levels: Some(levels),
+                ecm_levels: ecm::default_levels()[..levels].to_vec(),
                 ..config()
             };
             let mut d = driver(N1, &[], config);
@@ -1830,7 +1791,7 @@ mod tests {
         let mut table = Table::new();
         table
             .add("Analyze", "65537", analyzed(&[], prime("65537")))
-            .add("Analyze", "65536", analyzed(&[(2, 16)], Rest::One))
+            .add("Analyze", "65536", analyzed(&[(2, 16)], Cofactor::One))
             .add("Root", "65537", root(3));
         table
     }
@@ -1905,7 +1866,7 @@ mod tests {
     #[test]
     fn the_base_of_a_power_left_by_an_analysis_is_a_part() {
         let mut t = Table::new();
-        let power = Rest::Power {
+        let power = Cofactor::Power {
             base: big("1009"),
             exp: 2,
         };
@@ -1919,7 +1880,7 @@ mod tests {
         .add(
             "Analyze",
             "1008",
-            analyzed(&[(2, 4), (3, 2), (7, 1)], Rest::One),
+            analyzed(&[(2, 4), (3, 2), (7, 1)], Cofactor::One),
         )
         .add("Root", "1009", root(11))
         .add("Root", "66720956417", root(3));
@@ -1950,12 +1911,12 @@ mod tests {
             .add(
                 "Analyze",
                 "1012",
-                analyzed(&[(2, 2), (11, 1), (23, 1)], Rest::One),
+                analyzed(&[(2, 2), (11, 1), (23, 1)], Cofactor::One),
             )
             .add("Root", "3275633", root(3))
             .add("Root", "2027", Outcome::Root { root: None });
         let config = Config {
-            max_ecm_levels: Some(0),
+            ecm_levels: Vec::new(),
             ..config()
         };
         let mut d = driver("3275633", &[], config);

@@ -11,12 +11,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use primality_producer::driver::plural;
+use primality_producer::driver::{plural, Config, Driver, Snapshot};
 use primality_producer::hints::parse_hints;
-use primality_producer::targets;
-use primality_producer::{
-    run_task, Config, Driver, Outcome, Snapshot, Target, TaskResult, TARGETS,
-};
+use primality_producer::targets::{self, Target, TARGETS};
+use primality_producer::task::{run_task, Outcome, TaskResult};
 
 fn usage() -> String {
     format!(
@@ -58,10 +56,10 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let config = Config {
-        max_ecm_levels: args.max_ecm_levels,
-        ..Config::default()
-    };
+    let mut config = Config::default();
+    if let Some(levels) = args.max_ecm_levels {
+        config.ecm_levels.truncate(levels);
+    }
     let driver = match Driver::new(&args.n, parse_hints(&args.hints), config) {
         Ok(driver) => driver,
         Err(message) => {
@@ -292,10 +290,10 @@ fn progress_text(snapshot: &Snapshot, elapsed: Duration) -> String {
         snapshot.status,
         snapshot.message
     );
-    if let Some(level) = &snapshot.level {
+    if let Some(stage) = &snapshot.stage {
         text.push_str(&format!(
             " | {} {}/{} {}",
-            level.name, level.done, level.total, level.unit
+            stage.name, stage.done, stage.total, stage.unit
         ));
     }
     if snapshot.searched_digits > 0 {
@@ -323,22 +321,22 @@ fn progress_text(snapshot: &Snapshot, elapsed: Duration) -> String {
             let factors: Vec<String> = prime.factors.iter().map(|f| abbreviate(f)).collect();
             text.push_str(&format!(" factors {}", factors.join(" ")));
         }
-        for composite in &prime.open {
+        for part in &prime.open {
             // A part under analysis is not known composite yet.
-            if composite.stage == "analyzing" {
+            if part.stage == "analyzing" {
                 text.push_str(&format!(
                     " | analyzing {} ({} digits)",
-                    abbreviate(&composite.value),
-                    composite.digits
+                    abbreviate(&part.value),
+                    part.digits
                 ));
             } else {
                 text.push_str(&format!(
                     " | open {} ({} digits) {} {}/{}",
-                    abbreviate(&composite.value),
-                    composite.digits,
-                    composite.stage,
-                    composite.done,
-                    composite.total
+                    abbreviate(&part.value),
+                    part.digits,
+                    part.stage,
+                    part.done,
+                    part.total
                 ));
             }
         }

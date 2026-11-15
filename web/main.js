@@ -23,7 +23,7 @@ const TARGETS = new Map();
 
 const ui = elementsById([
   'tools', 'form', 'n', 'hints', 'workers', 'generate', 'stop', 'inputError', 'announcer', 'run',
-  'status', 'elapsed', 'levelBox', 'progress', 'levelText', 'searched', 'stoppedHeading',
+  'status', 'elapsed', 'stageBox', 'progress', 'stageText', 'searched', 'stoppedHeading',
   'outputBox', 'targets', 'requires', 'copyOutput', 'playground', 'output', 'reason',
   'factorsBox', 'factors', 'copyFactors', 'treeBox', 'tree', 'hintsBox', 'hintsList',
   'galleryNote', 'galleryList', 'galleryInfo',
@@ -32,7 +32,7 @@ const ui = elementsById([
 // The page's state. It is 'idle' before the first run, then 'starting' while the workers load,
 // 'running', and finally 'certified', 'composite', 'failed' or 'stopped'.
 let state = 'idle';
-// The current run (see `beginRun`), or null before the first one.
+// The current run (see `replaceRun`), or null before the first one.
 let run = null;
 // The last snapshot rendered, as an object.
 let latestSnapshot = null;
@@ -176,11 +176,14 @@ function startRun(galleryEntry = null) {
     } else {
       showInputError(e);
     }
-    beginRun(null, workerCount);
+    replaceRun(null, workerCount);
     failRun(message);
+    if (message === null) {
+      ui.n.focus();
+    }
     return;
   }
-  beginRun(driver, workerCount);
+  replaceRun(driver, workerCount);
   guarded(() => {
     // An input the driver settles at once (n < 2) needs no worker.
     if (driver.is_finished()) {
@@ -195,7 +198,7 @@ function startRun(galleryEntry = null) {
 }
 
 // Replaces the previous run (freeing its driver) by a fresh one around `driver`.
-function beginRun(driver, workerCount) {
+function replaceRun(driver, workerCount) {
   disposeRun();
   // `render` replaces the previous run's snapshot only when the snapshot JSON changes, and a run
   // whose driver could not be constructed has no snapshot, so the previous one is dropped here.
@@ -214,7 +217,7 @@ function beginRun(driver, workerCount) {
     // differs from these.
     renderedJson: null,
     renderedState: null,
-    // The tree item of each prime and the JSON of its view, by value.
+    // The tree item of each prime with its count nodes and the key of its view, by value.
     treeItems: new Map(),
     lastRender: 0,
     renderTimer: null,
@@ -323,15 +326,12 @@ function onWorkerMessage(slot, data) {
       requestRender();
       break;
     case 'result': {
+      // An `Error` outcome is how worker.js reports an exception, which for a Rust panic leaves
+      // the worker's wasm instance trapped. The driver ends the run on it, so that worker never
+      // gets another task.
       const stale = run.driver.submit(data.result);
       slot.taskId = null;
-      // An `Error` outcome is how worker.js reports an exception, which for a Rust panic leaves
-      // the wasm instance trapped mid-task, so that instance never gets another task.
-      if (JSON.parse(data.result).outcome.kind === 'Error') {
-        replaceWorker(slot);
-      } else {
-        slot.idle = true;
-      }
+      slot.idle = true;
       replaceStaleWorkers(stale);
       pump();
       break;
@@ -387,7 +387,7 @@ function dispatch() {
 }
 
 function finishRun() {
-  endRun();
+  markRunOver();
   const snapshot = readSnapshot();
   setState(snapshot ? snapshot.status : 'failed');
   render();
@@ -400,7 +400,7 @@ function failRun(message) {
     return;
   }
   run.error = message;
-  endRun();
+  markRunOver();
   setState('failed');
   render();
 }
@@ -410,13 +410,13 @@ function stopRun() {
   if (!run || run.done) {
     return;
   }
-  endRun();
+  markRunOver();
   setState('stopped');
   render();
 }
 
 // Marks the run over, which stops its worker messages, renders and ticks.
-function endRun() {
+function markRunOver() {
   run.done = true;
   run.finished = performance.now();
   terminateWorkers(run);
@@ -525,7 +525,7 @@ function selectGalleryEntry(entry) {
   if (!canStart()) {
     return;
   }
-  ui.n.value = entry.input === 'expr' ? entry.expr : entry.value;
+  ui.n.value = entry.number;
   ui.hints.value = entry.hints ?? '';
   galleryHints = ui.hints.value;
   startRun(entry);
@@ -573,7 +573,7 @@ function render() {
     latestSnapshot = json === null ? null : JSON.parse(json);
   }
   renderStatus(latestSnapshot);
-  renderLevel(latestSnapshot);
+  renderStage(latestSnapshot);
   if (json !== run.renderedJson || state !== run.renderedState) {
     run.renderedJson = json;
     run.renderedState = state;
@@ -636,38 +636,63 @@ function setStatusText(text) {
   ui.status.textContent = text;
 }
 
-// The progress bar of the current level and the "searched up to" line.
-function renderLevel(snapshot) {
-  const level = snapshot ? snapshot.level : null;
-  ui.levelBox.hidden = level === null;
-  if (level !== null) {
-    ui.progress.max = Math.max(1, level.total);
-    ui.progress.value = Math.min(level.done, level.total);
-    ui.levelText.textContent = `${level.name}: ${level.done}/${level.total} ${level.unit ?? 'curves'}`;
+// The progress bar of the current stage and the "searched up to" line.
+function renderStage(snapshot) {
+  const stage = snapshot ? snapshot.stage : null;
+  ui.stageBox.hidden = stage === null;
+  if (stage !== null) {
+    ui.progress.max = Math.max(1, stage.total);
+    ui.progress.value = Math.min(stage.done, stage.total);
+    ui.stageText.textContent = `${stage.name}: ${stage.done}/${stage.total} ${stage.unit}`;
   }
   const searched = snapshot ? snapshot.searched_digits : 0;
   ui.searched.hidden = !(searched > 0);
   ui.searched.textContent = `Searched for factors up to ${searched} digits`;
 }
 
-// An item is rebuilt only when its prime's view changed, so a progress tick on one composite does
-// not rebuild the items of the other primes.
+// A rebuilt or re-inserted item loses any text selected in it, and the stage and curve count of an
+// open composite change several times a second during ECM. So an item is rebuilt only when its
+// prime's view changed apart from those, which are written in place, and only the items that
+// changed are swapped.
 function renderTree(snapshot) {
   const primes = snapshot ? snapshot.primes : [];
   ui.treeBox.hidden = primes.length === 0;
   const items = primes.map((prime) => {
-    const json = JSON.stringify(prime);
-    const cached = run.treeItems.get(prime.value);
-    if (cached !== undefined && cached.json === json) {
-      return cached.item;
+    const open = prime.open.map((part) => [part.value, part.stage === 'analyzing']);
+    const key = JSON.stringify({ ...prime, open });
+    let cached = run.treeItems.get(prime.value);
+    if (cached === undefined || cached.key !== key) {
+      cached = { key, ...primeItem(prime) };
+      run.treeItems.set(prime.value, cached);
     }
-    const item = primeItem(prime);
-    run.treeItems.set(prime.value, { json, item });
-    return item;
+    // Writing a text node, even with the same text, moves a selection end inside it.
+    cached.counts.forEach((node, index) => {
+      if (node === null) {
+        return;
+      }
+      const text = countText(prime.open[index]);
+      if (node.data !== text) {
+        node.data = text;
+      }
+    });
+    return cached.item;
   });
-  ui.tree.replaceChildren(...items);
+  const current = ui.tree.children;
+  const inPlace = items.length === current.length
+    && items.every((item, index) => item === current[index] || item.parentNode !== ui.tree);
+  if (inPlace) {
+    items.forEach((item, index) => {
+      if (item !== current[index]) {
+        current[index].replaceWith(item);
+      }
+    });
+  } else {
+    ui.tree.replaceChildren(...items);
+  }
 }
 
+// The item of `prime`, with the text node of each open part's count (null for a part under
+// analysis).
 function primeItem(prime) {
   const item = document.createElement('li');
   item.append(numberSpan(prime.value), ' ', badge(prime.state));
@@ -683,31 +708,37 @@ function primeItem(prime) {
     });
     item.append(factors);
   }
+  const counts = [];
   if (prime.open.length > 0) {
     const open = document.createElement('ul');
     open.className = 'open';
-    open.append(...prime.open.map(compositeItem));
+    for (const part of prime.open) {
+      const child = partItem(part);
+      open.append(child.item);
+      counts.push(child.count);
+    }
     item.append(open);
   }
-  return item;
+  return { item, counts };
 }
 
-// The digit count is added here when `numberSpan` does not add it. A part still under analysis is
-// not known to be composite and has no progress to show.
-function compositeItem(composite) {
+// The item of an open part with the text node of its count. The digit count is added here when
+// `numberSpan` does not add it. A part still under analysis is not known to be composite and has
+// no count to show.
+function partItem(part) {
   const item = document.createElement('li');
-  const digits = composite.value.length > COUNT_DIGITS_ABOVE ? '' : ` (${composite.digits} digits)`;
-  if (composite.stage === 'analyzing') {
-    item.append(badge('analyzing'), ' ', numberSpan(composite.value), digits);
-  } else {
-    item.append(
-      badge('composite'),
-      ' ',
-      numberSpan(composite.value),
-      `${digits}: ${composite.stage} ${composite.done}/${composite.total}`,
-    );
+  const digits = part.value.length > COUNT_DIGITS_ABOVE ? '' : ` (${part.digits} digits)`;
+  if (part.stage === 'analyzing') {
+    item.append(badge('analyzing'), ' ', numberSpan(part.value), digits);
+    return { item, count: null };
   }
-  return item;
+  const count = document.createTextNode(countText(part));
+  item.append(badge('composite'), ' ', numberSpan(part.value), digits, count);
+  return { item, count };
+}
+
+function countText(part) {
+  return `: ${part.stage} ${part.done}/${part.total}`;
 }
 
 // A span showing every digit of `value`, followed by the digit count for a long number.
@@ -807,11 +838,13 @@ function hintItem(hint, verdict, className) {
 function showInputError(error) {
   ui.inputError.hidden = false;
   ui.inputError.textContent = errorMessage(error);
+  ui.n.setAttribute('aria-invalid', 'true');
 }
 
 function clearInputError() {
   ui.inputError.hidden = true;
   ui.inputError.textContent = '';
+  ui.n.removeAttribute('aria-invalid');
 }
 
 // The text of an exception, including wasm runtime errors, which have no useful `message`.
@@ -864,6 +897,7 @@ function copyHandler(button, source) {
 }
 
 function copyBySelection(text) {
+  const focused = document.activeElement;
   const area = document.createElement('textarea');
   area.value = text;
   area.setAttribute('readonly', '');
@@ -878,5 +912,6 @@ function copyBySelection(text) {
     copied = false;
   }
   area.remove();
+  focused?.focus();
   return copied;
 }
