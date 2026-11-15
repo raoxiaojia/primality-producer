@@ -1,8 +1,7 @@
 # Builds the page and copies it to the server. It needs three Actions secrets. DEPLOY_SSH_KEY is
 # a passphrase-free ed25519 private key made for this (`ssh-keygen -t ed25519 -N ''`), whose public
 # key is in the server's authorized_keys. DEPLOY_KNOWN_HOSTS is the output of `ssh-keyscan HOST`
-# for the host in DEPLOY_TARGET. DEPLOY_TARGET is `user@host:/path/to/folder`, as for
-# `scripts/build-web.sh --deploy`.
+# for the host in DEPLOY_TARGET. DEPLOY_TARGET is `user@host:/path/to/folder`.
 name: Deploy
 
 on:
@@ -19,13 +18,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deploy:
+  build:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      # A missing secret would otherwise surface only after the build, or not at all for
-      # DEPLOY_TARGET (the script skips the copy when it is empty).
+      # A missing secret would otherwise surface only after the build.
       - name: Check the secrets
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
@@ -34,6 +32,8 @@ jobs:
         run: ': "${DEPLOY_SSH_KEY:?}" "${DEPLOY_KNOWN_HOSTS:?}" "${DEPLOY_TARGET:?}"'
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Test
         run: cargo test --locked
@@ -48,6 +48,26 @@ jobs:
           echo "$sha256  wasm-pack.tar.gz" | sha256sum -c
           tar xzf wasm-pack.tar.gz --strip-components=1 -C "$HOME/.cargo/bin" "$name/wasm-pack"
 
+      - name: Build
+        run: scripts/build-web.sh
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist
+          if-no-files-found: error
+          retention-days: 1
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist
+
       - name: Set up SSH
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
@@ -58,7 +78,12 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
 
-      - name: Build and deploy
+      - name: Deploy
         env:
           DEPLOY_TARGET: ${{ secrets.DEPLOY_TARGET }}
-        run: scripts/build-web.sh --deploy "$DEPLOY_TARGET"
+        run: |
+          # The pages and main.js go last, so that a visitor during the copy never loads a page
+          # whose versioned URLs name files not yet copied.
+          shopt -s extglob
+          cd dist
+          scp -r !(main.js|*.html) main.js *.html "$DEPLOY_TARGET"
