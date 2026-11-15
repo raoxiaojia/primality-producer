@@ -18,7 +18,7 @@ case "${1:-}" in
 esac
 
 cd "$root"
-wasm-pack build --target web --release --no-typescript --out-dir web/pkg
+wasm-pack build --target web --release --no-typescript --no-pack --out-dir web/pkg
 
 rm -rf "$dist"
 mkdir -p "$dist/pkg"

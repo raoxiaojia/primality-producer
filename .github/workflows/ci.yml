@@ -15,8 +15,16 @@ jobs:
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    defaults:
+      run:
+        # Unlike the default shell, `bash` here fails a step when any command of a pipe fails.
+        shell: bash
     steps:
+      # No later step needs the token, so it is not left in `.git/config` for the build scripts and
+      # the downloaded installer to read.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Unit tests
         run: cargo test --locked

@@ -7,12 +7,12 @@ use num_traits::{CheckedSub, ToPrimitive};
 use crate::arith::{self, BigUint};
 
 /// The largest value, in bits, of a numeral in an expression and of every intermediate result.
-pub const MAX_BITS: u64 = 10_000;
+const MAX_BITS: u64 = 10_000;
 /// The largest exponent of `^`, whatever the base.
-pub const MAX_EXPONENT: u32 = 10_000;
+const MAX_EXPONENT: u32 = 10_000;
 /// The most tokens an expression may have. It bounds the depth of the parse tree, and with it
 /// the recursion of the parser, the printer and the tree's drop.
-pub const MAX_TOKENS: usize = 400;
+const MAX_TOKENS: usize = 400;
 
 /// A numeral or expression longer than this many digits is shown shortened in error messages.
 const BRIEF_DIGITS: usize = 20;

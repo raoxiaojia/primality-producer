@@ -2,26 +2,29 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::arith::{parse_decimal, BigUint};
+use crate::arith::{self, parse_decimal, BigUint};
+
+/// The largest integer a JavaScript number holds exactly. The page passes tasks through JSON
+/// numbers, which would round a larger root.
+const MAX_EXACT_JS_INTEGER: u64 = (1 << 53) - 1;
 
 /// The hints parsed from the hints text.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Hints {
-    /// The factor hints, ascending and distinct, each at least 2.
-    pub factors: Vec<BigUint>,
-    /// The root hints, a primitive root (at least 2) for each prime they name.
-    pub roots: BTreeMap<BigUint, BigUint>,
+    /// The factor hints, each at least 2.
+    pub(crate) factors: BTreeSet<BigUint>,
+    /// The root hints, a residue in `2..=MAX_EXACT_JS_INTEGER` modulo each prime they name.
+    pub(crate) roots: BTreeMap<BigUint, u64>,
 }
 
 /// Parses the hints text. A token is a maximal run of ASCII digits and colons, and anything else
 /// separates tokens (so `3^2` yields 3 and 2). A token `q` is a factor hint, and `q:a` adds the
-/// root hint `a` for `q`. Tokens of other shapes (`:5`, `7:`, `1:2:3`) are ignored. A factor
-/// below 2 is dropped with its root, and a root below 2 alone. Duplicates are removed, and the
-/// first root for a prime wins.
+/// root hint `a mod q` for `q`. Tokens of other shapes (`:5`, `7:`, `1:2:3`) are ignored. A factor
+/// below 2 is dropped with its root, and a root alone when its residue is below 2 or above
+/// `MAX_EXACT_JS_INTEGER`. Duplicates are removed, and the first root for a prime wins.
 pub fn parse_hints(text: &str) -> Hints {
     let two = BigUint::from(2u32);
-    let mut factors = BTreeSet::new();
-    let mut roots = BTreeMap::new();
+    let mut hints = Hints::default();
     for token in text.split(|c: char| !c.is_ascii_digit() && c != ':') {
         let (factor, root) = match token.split_once(':') {
             None => (parse_decimal(token), None),
@@ -33,15 +36,15 @@ pub fn parse_hints(text: &str) -> Hints {
         let Some(factor) = factor.filter(|q| *q >= two) else {
             continue;
         };
-        if let Some(root) = root.filter(|a| *a >= two) {
-            roots.entry(factor.clone()).or_insert(root);
+        if let Some(root) = root
+            .and_then(|a| arith::to_u64(&(a % &factor)))
+            .filter(|a| (2..=MAX_EXACT_JS_INTEGER).contains(a))
+        {
+            hints.roots.entry(factor.clone()).or_insert(root);
         }
-        factors.insert(factor);
+        hints.factors.insert(factor);
     }
-    Hints {
-        factors: factors.into_iter().collect(),
-        roots,
-    }
+    hints
 }
 
 /// The hints text of the tree primes `primes`, one line `q:root` (or `q` without a root) per
@@ -62,15 +65,12 @@ pub fn render_hints<'a>(primes: impl IntoIterator<Item = (&'a BigUint, Option<u6
 mod tests {
     use super::*;
 
-    fn bigs(values: &[u64]) -> Vec<BigUint> {
+    fn bigs(values: &[u64]) -> BTreeSet<BigUint> {
         values.iter().map(|&v| BigUint::from(v)).collect()
     }
 
-    fn roots(pairs: &[(u64, u64)]) -> BTreeMap<BigUint, BigUint> {
-        pairs
-            .iter()
-            .map(|&(q, a)| (BigUint::from(q), BigUint::from(a)))
-            .collect()
+    fn roots(pairs: &[(u64, u64)]) -> BTreeMap<BigUint, u64> {
+        pairs.iter().map(|&(q, a)| (BigUint::from(q), a)).collect()
     }
 
     #[test]
@@ -93,9 +93,20 @@ mod tests {
         // Tokens of a bad shape are ignored like other junk; `x:3` is the token `:3`.
         let parsed = parse_hints(":5 7: 1:2:3 x:3 5:7:");
         assert_eq!(parsed, Hints::default());
-        // A factor below 2 goes with its root; a root below 2 goes alone.
-        let parsed = parse_hints("1:9 0:3 13:1 17:0");
-        assert_eq!(parsed.factors, bigs(&[13, 17]));
+        // A factor below 2 goes with its root; a root whose residue is below 2 goes alone.
+        let parsed = parse_hints("1:9 0:3 13:1 17:0 19:20 23:46");
+        assert_eq!(parsed.factors, bigs(&[13, 17, 19, 23]));
+        assert!(parsed.roots.is_empty());
+    }
+
+    #[test]
+    fn a_root_is_reduced_and_kept_only_below_2_to_the_53() {
+        // 65542 is 5 modulo 65537, and 65539 · (2^64 − 1) + 7 is 7 modulo 65539.
+        let huge = BigUint::from(65539u32) * BigUint::from(u64::MAX) + 7u32;
+        let parsed = parse_hints(&format!("65537:65542 65539:{huge}"));
+        assert_eq!(parsed.roots, roots(&[(65537, 5), (65539, 7)]));
+        // 43^11 is a primitive root of 2^127 − 1 above 2^53, which the page could not carry.
+        let parsed = parse_hints("170141183460469231731687303715884105727:929293739471222707");
         assert!(parsed.roots.is_empty());
     }
 

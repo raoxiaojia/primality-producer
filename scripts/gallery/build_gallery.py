@@ -2,14 +2,13 @@
 """Builds web/gallery.json, the page's gallery, from scripts/gallery/entries.json.
 
 usage: build_gallery.py [--producer PATH] [--out PATH] [--only ID [ID ...]] [--threads K]
-                        [--max-ecm-levels L] [--built DATE]
+                        [--max-ecm-levels L]
 
 Runs each entry with its hints file through the command-line tool and records the roots of its
 tree as the entry's hints. Exits with an error when an entry does not certify.
 """
 
 import argparse
-import datetime
 import json
 import os
 import re
@@ -29,13 +28,10 @@ DEFAULT_OUT = os.path.join(PROJECT_ROOT, "web", "gallery.json")
 DEFAULT_PRODUCER = os.path.join(
     PROJECT_ROOT, "target", "release", "primality-cert.exe" if os.name == "nt" else "primality-cert"
 )
-# Tree primes below this need no witness entry (the driver's `witness_bound`).
-WITNESS_BOUND = 1024
 # The lines of the producer's stderr shown when an entry fails.
 STDERR_TAIL = 20
 # The characters of the producer's input expressions (src/input.rs).
 INPUT_CHARS = re.compile(r"[0-9\s+\-*^()]+")
-GALLERY_VERSION = 1
 
 
 class GalleryError(Exception):
@@ -53,7 +49,6 @@ def parse_args():
     parser.add_argument("--only", nargs="+", metavar="ID", help="build only these entries (needs --out)")
     parser.add_argument("--threads", type=int, default=8, help="the producer's thread count")
     parser.add_argument("--max-ecm-levels", type=int, default=1, help="the producer's ECM level cap")
-    parser.add_argument("--built", help="the build date to record (default today, UTC)")
     args = parser.parse_args()
     if args.only and args.out is None:
         parser.error("--only builds a partial gallery and needs an explicit --out")
@@ -87,16 +82,16 @@ def hints_text(entry_id):
         return file.read().strip()
 
 
-def input_field(expr):
-    """The record field that fills the number box, "expr" when `expr` uses only the producer's
-    input characters and "value" otherwise."""
-    return "expr" if INPUT_CHARS.fullmatch(expr) else "value"
+def number_text(expr, value):
+    """The text for the number box, `expr` when it uses only the producer's input characters and
+    the decimal `value` otherwise."""
+    return expr if INPUT_CHARS.fullmatch(expr) else str(value)
 
 
 def producer_command(producer, number, hints, threads, max_ecm_levels):
-    """The producer's command line for the input `number` (a number or an expression) with the
-    hints text `hints` (None for none)."""
-    command = [producer, str(number)]
+    """The producer's command line for the input text `number` with the hints text `hints` (None
+    for none)."""
+    command = [producer, number]
     if hints is not None:
         command += ["--hints", hints]
     command += ["--json", "--threads", str(threads), "--max-ecm-levels", str(max_ecm_levels)]
@@ -123,8 +118,9 @@ def stderr_tail(stderr):
     return f"\n--- producer stderr (last {STDERR_TAIL} lines) ---\n" + "\n".join(lines[-STDERR_TAIL:])
 
 
-def gallery_entry(entry, value, snapshot):
-    """The gallery record of `entry` with the input `value` from the producer's final `snapshot`."""
+def gallery_entry(entry, number, value, snapshot):
+    """The gallery record of `entry`, run as the input text `number` of value `value`, from the
+    producer's final `snapshot`."""
     status = snapshot.get("status")
     if status != "certified":
         raise GalleryError(f"status {status!r}: {snapshot.get('message', '')}")
@@ -134,12 +130,10 @@ def gallery_entry(entry, value, snapshot):
     tree = []
     for prime in snapshot["primes"]:
         q = int(prime["value"])
-        if q < WITNESS_BOUND:
-            continue
         if prime.get("state") != "done" or prime.get("root") is None:
             raise GalleryError(f"tree prime {q} is {prime.get('state')!r} without a root")
         tree.append((q, int(prime["root"])))
-    if value >= WITNESS_BOUND and value not in {q for q, _ in tree}:
+    if value not in {q for q, _ in tree}:
         raise GalleryError("the input is missing from the tree")
     if len({q for q, _ in tree}) != len(tree):
         raise GalleryError("a tree prime is listed twice")
@@ -150,10 +144,8 @@ def gallery_entry(entry, value, snapshot):
         "name": entry["name"],
         "ref": entry["ref"],
         "expr": entry["expr"],
-        "value": decimal,
-        "input": input_field(entry["expr"]),
+        "number": number,
         "digits": len(decimal),
-        "entries": len(tree),
         "hints": hints,
         "source": entry["source"],
     }
@@ -185,28 +177,23 @@ def build(args):
         started = time.monotonic()
         value = expr_eval.evaluate(entry["expr"])
         hints = hints_text(entry["id"])
-        number = entry["expr"] if input_field(entry["expr"]) == "expr" else value
+        number = number_text(entry["expr"], value)
         command = producer_command(args.producer, number, hints, args.threads, args.max_ecm_levels)
         try:
             snapshot = run_producer(command)
-            record = gallery_entry(entry, value, snapshot)
+            record = gallery_entry(entry, number, value, snapshot)
         except GalleryError as error:
             raise GalleryError(f"{entry['id']}: {error}") from None
         records.append(record)
         unused = snapshot.get("hints_unused", [])
         unused_note = f", {len(unused)} hint(s) divide nothing" if unused else ""
         print(
-            f"{entry['id']}: {record['digits']} digits, {record['entries']} entries, "
+            f"{entry['id']}: {record['digits']} digits, {len(snapshot['primes'])} entries, "
             f"{time.monotonic() - started:.1f} s{unused_note}",
             file=sys.stderr,
             flush=True,
         )
-    built = args.built or datetime.datetime.now(datetime.timezone.utc).date().isoformat()
-    return {
-        "version": GALLERY_VERSION,
-        "built": built,
-        "groups": grouped(records, entries),
-    }
+    return {"groups": grouped(records, entries)}
 
 
 def write_gallery(gallery, path):

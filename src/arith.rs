@@ -11,10 +11,6 @@ use num_traits::{One, ToPrimitive, Zero};
 struct Rng(u64);
 
 impl Rng {
-    fn new(seed: u64) -> Rng {
-        Rng(seed)
-    }
-
     fn next_u64(&mut self) -> u64 {
         self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.0;
@@ -191,7 +187,7 @@ pub fn digits(x: &BigUint) -> usize {
 /// pseudoprimes to twelve prime bases", Math. Comp. 86 (2017), 985–1003).
 const MR_PRIME_BASES: [u64; 13] = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41];
 
-const MR_RANDOM_BASES: usize = 20;
+const MR_RANDOM_BASE_COUNT: usize = 20;
 
 fn mr_deterministic_bound() -> BigUint {
     BigUint::parse_bytes(b"3317044064679887385961981", 10).expect("a decimal literal")
@@ -224,8 +220,8 @@ fn strong_probable_prime(
 
 /// Miller–Rabin. `Ok(())` means probable prime. `Err(base)` names a base that proves `n`
 /// composite (`Err(0)` for `n < 2`, `Err(2)` for an even `n > 2`). Above the bound where
-/// `MR_PRIME_BASES` are deterministic, `MR_RANDOM_BASES` more bases come from a PRNG seeded with
-/// the low 64 bits of `n`, so the result is the same on every run.
+/// `MR_PRIME_BASES` are deterministic, `MR_RANDOM_BASE_COUNT` more bases come from a PRNG seeded
+/// with the low 64 bits of `n`, so the result is the same on every run.
 pub fn miller_rabin(n: &BigUint) -> Result<(), u64> {
     match to_u64(n) {
         Some(0 | 1) => return Err(0),
@@ -251,8 +247,8 @@ pub fn miller_rabin(n: &BigUint) -> Result<(), u64> {
     if *n < mr_deterministic_bound() {
         return Ok(());
     }
-    let mut rng = Rng::new(n.iter_u64_digits().next().unwrap_or(0));
-    for _ in 0..MR_RANDOM_BASES {
+    let mut rng = Rng(low_bits(n));
+    for _ in 0..MR_RANDOM_BASE_COUNT {
         // A base in `[2, 2^64 - 2]`, inside `[2, n - 2]` since `n > 2^64` here. A base of the
         // size of `n` could not be reported in the result's `u64`.
         let a = 2 + rng.next_u64() % (u64::MAX - 2);
@@ -379,35 +375,6 @@ pub mod big_str_vec {
                 })
             })
             .collect()
-    }
-}
-
-/// Serde helpers writing an `Option<BigUint>` as a decimal string or `null`, for
-/// `#[serde(with = "crate::arith::big_str_opt")]`.
-pub mod big_str_opt {
-    use super::{parse_decimal, BigUint};
-    use serde::de::{Deserialize, Deserializer, Error as _};
-    use serde::ser::Serializer;
-
-    pub fn serialize<S: Serializer>(
-        value: &Option<BigUint>,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
-        match value {
-            Some(value) => serializer.serialize_some(&value.to_str_radix(10)),
-            None => serializer.serialize_none(),
-        }
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<Option<BigUint>, D::Error> {
-        match Option::<String>::deserialize(deserializer)? {
-            Some(s) => parse_decimal(&s)
-                .map(Some)
-                .ok_or_else(|| D::Error::custom(format!("expected a decimal string, found {s:?}"))),
-            None => Ok(None),
-        }
     }
 }
 

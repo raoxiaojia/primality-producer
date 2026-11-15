@@ -49,22 +49,22 @@ def value_of(text):
 
 
 def cases():
-    """The (label, input, hints, value) of every input to check."""
+    """The (label, input, hints) of every input to check."""
     with open(os.path.join(HERE, "inputs.txt"), encoding="utf-8") as file:
         for line in file:
             line = line.strip()
             if line and not line.startswith("#"):
-                yield line, line, "", value_of(line)
+                yield line, line, ""
     with open(os.path.join(ROOT, "web", "gallery.json"), encoding="utf-8") as file:
         gallery = json.load(file)
     for group in gallery["groups"]:
         for entry in group["entries"]:
-            text = entry["expr"] if entry["input"] == "expr" else entry["value"]
-            yield entry["id"], text, entry["hints"], int(entry["value"])
+            yield entry["id"], entry["number"], entry["hints"]
 
 
-def certificate(text, hints, value):
+def certificate(text, hints):
     """The tool's output for `text` as (imports, example). Raises ValueError naming the problem."""
+    value = value_of(text)
     command = ["cargo", "run", "--quiet", "--locked", "--", text, "--quiet", "--target", "mathlib"]
     if hints:
         command += ["--hints", hints]
@@ -93,9 +93,9 @@ def certificate(text, hints, value):
 
 def main():
     imports, examples, failures = set(), [], 0
-    for label, text, hints, value in cases():
+    for label, text, hints in cases():
         try:
-            used, example = certificate(text, hints, value)
+            used, example = certificate(text, hints)
         except ValueError as error:
             print(f"FAIL {label}: {error}")
             failures += 1
