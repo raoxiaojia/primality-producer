@@ -15,7 +15,6 @@ Building needs Rust through rustup (`rust-toolchain.toml` pins the release) and,
 
 - `cargo build --release` builds the command-line tool `target/release/primality-cert`.
 - `scripts/build-web.sh` builds the page into `dist/`, a static site to copy to any host.
-  `scripts/build-web.sh --deploy user@host:/path/to/folder` also copies it there with `scp`.
 - `python scripts/serve.py` serves `dist/` at `http://localhost:8000/`.
 
 ## Run

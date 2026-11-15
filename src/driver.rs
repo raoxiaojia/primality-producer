@@ -9,7 +9,7 @@ use serde::Serialize;
 use crate::arith::{self, BigUint};
 use crate::ecm::{self, EcmLevel};
 use crate::hints::{render_hints, Hints};
-use crate::input::{parse_input, Input};
+use crate::input::{brief, parse_input, Input};
 use crate::targets::Output;
 use crate::task::{self, Cofactor, Outcome, Task, TaskResult};
 use crate::verify::{check_witness_bound, Certificate, Entry, MAX_WITNESS_BOUND};
@@ -17,7 +17,7 @@ use crate::verify::{check_witness_bound, Certificate, Entry, MAX_WITNESS_BOUND};
 /// The parameters of a run. `Default` gives the production values.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Config {
-    /// Primes below this need no certificate entry (at most `MAX_WITNESS_BOUND`).
+    /// Primes below this need no certificate entry (in `MIN_WITNESS_BOUND..=MAX_WITNESS_BOUND`).
     pub witness_bound: u64,
     /// The trial division bound.
     pub trial_bound: u32,
@@ -274,7 +274,7 @@ pub struct Driver {
 
 impl Driver {
     /// A driver for the input `n`, a numeral or an expression (`input::parse_input`). Fails when
-    /// `parse_input` rejects `n` or `config.witness_bound` exceeds `MAX_WITNESS_BOUND`.
+    /// `parse_input` rejects `n` or `check_witness_bound` rejects `config.witness_bound`.
     pub fn new(n: &str, hints: Hints, config: Config) -> Result<Driver, String> {
         check_witness_bound(config.witness_bound)?;
         let Input { n: value, term, .. } = parse_input(n, config.max_digits)?;
@@ -1124,7 +1124,7 @@ impl Driver {
         if self.is_verifying() {
             "verifying the certificate".to_string()
         } else if self.nodes.is_empty() && self.composites.is_empty() {
-            format!("analyzing {}", self.n)
+            format!("analyzing {}", brief(&self.n))
         } else {
             format!("{} in the tree", plural(self.nodes.len(), "prime"))
         }

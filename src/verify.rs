@@ -11,12 +11,22 @@ use crate::arith::{is_small_prime, lucas_powers, to_u64, BigUint};
 /// `norm_num` and looks every larger prime up in the certificate.
 pub const MAX_WITNESS_BOUND: u64 = 1 << 10;
 
-/// Fails when `witness_bound` exceeds `MAX_WITNESS_BOUND`.
+/// The smallest witness bound `verify` accepts. Below it the prime 2 would need an entry, whose
+/// root `2 ≤ root < 2` cannot exist.
+pub const MIN_WITNESS_BOUND: u64 = 3;
+
+/// Fails when `witness_bound` is outside `MIN_WITNESS_BOUND..=MAX_WITNESS_BOUND`.
 pub fn check_witness_bound(witness_bound: u64) -> Result<(), String> {
     if witness_bound > MAX_WITNESS_BOUND {
         return Err(format!(
             "witness_bound is {witness_bound}, above the ceiling {MAX_WITNESS_BOUND}: the tactic \
              proves primes below 2^10 itself and needs an entry for every larger prime"
+        ));
+    }
+    if witness_bound < MIN_WITNESS_BOUND {
+        return Err(format!(
+            "witness_bound is {witness_bound}, below the floor {MIN_WITNESS_BOUND}: an entry for \
+             the prime 2 would need a root with 2 ≤ root < 2"
         ));
     }
     Ok(())
@@ -45,7 +55,8 @@ pub struct Certificate {
     pub entries: Vec<Entry>,
 }
 
-/// Checks that `cert` proves `n` prime. A `witness_bound` above `MAX_WITNESS_BOUND` is refused.
+/// Checks that `cert` proves `n` prime. A `witness_bound` outside
+/// `MIN_WITNESS_BOUND..=MAX_WITNESS_BOUND` is refused.
 /// 1. `n ≥ 2`. If `n < witness_bound`, `entries` is empty and `n` is prime by trial division.
 ///    Else `entries[0].q == n` and the `q`s are strictly descending (so distinct).
 /// 2. Each entry has `q ≥ witness_bound` and a nonempty, strictly ascending list of factors, each
@@ -287,6 +298,14 @@ mod tests {
     #[test]
     fn accepts_the_certificate_of_2_127_minus_1() {
         assert_eq!(verify(&mersenne_127(), WITNESS_BOUND), Ok(()));
+    }
+
+    #[test]
+    fn rejects_a_witness_bound_out_of_range() {
+        for (bound, detail) in [(2, "below the floor 3"), (1025, "above the ceiling 1024")] {
+            let err = verify(&mersenne_127(), bound).expect_err("an out-of-range bound");
+            assert!(err.contains(detail), "{err:?} should mention {detail:?}");
+        }
     }
 
     #[test]
