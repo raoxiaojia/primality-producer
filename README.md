@@ -37,7 +37,8 @@ target/release/primality-cert "2^127 - 1"
 target/release/primality-cert 170141183460469231731687303715884105727 --hints "77158673929:11"
 ```
 
-The page takes `?n=…`, `?hints=…`, `?workers=…` and `?target=…` to prefill its form.
+The page takes `?n=…`, `?hints=…`, `?workers=…` and `?target=…` to prefill its form. Its credits
+page, `web/credits.html`, lists related projects.
 
 ## Test
 

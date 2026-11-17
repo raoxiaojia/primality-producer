@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Credits and related projects</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="./style.css?v=dev">
+</head>
+<body>
+  <header>
+    <h1>Credits and related projects</h1>
+    <p class="intro"><a href="./">Back to the certificate generator</a></p>
+  </header>
+
+  <main class="credits">
+    <section>
+      <h2>Primality certificates in Lean</h2>
+      <ul>
+        <li>
+          <a href="https://leanprover-community.github.io/mathlib4_docs/Mathlib/Tactic/Primality.html">Mathlib's
+          <code>primality</code> tactic</a> checks the Lucas certificates this page prints.
+        </li>
+        <li>
+          <a href="https://github.com/b-mehta/PrimeCert">PrimeCert</a> proves primality in Lean 4
+          with Mathlib from Pocklington certificates, checked by the kernel.
+        </li>
+        <li>
+          <a href="https://github.com/leanprover/hex-primality">hex-primality</a> proves primality
+          in Lean 4 without Mathlib, from certificates checked by the kernel.
+        </li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Factoring</h2>
+      <ul>
+        <li>
+          <a href="https://factordb.com/">factordb</a> collects known factorizations. The factor
+          hints of the gallery come from it.
+        </li>
+        <li>
+          <a href="https://gitlab.inria.fr/zimmerma/ecm">GMP-ECM</a> implements the elliptic curve
+          method.
+        </li>
+        <li>
+          <a href="https://github.com/bbuhrow/yafu">YAFU</a> factors automatically with ECM, the
+          quadratic sieve and the number field sieve.
+        </li>
+        <li>
+          <a href="https://sourceforge.net/projects/msieve/">msieve</a> implements the quadratic
+          sieve and the number field sieve.
+        </li>
+        <li>
+          <a href="https://cado-nfs.gitlabpages.inria.fr/">CADO-NFS</a> implements the number field
+          sieve.
+        </li>
+        <li>
+          <a href="https://www.alpertron.com.ar/ECM.HTM">Alpertron's integer factorization
+          calculator</a> runs ECM and the quadratic sieve in the browser.
+        </li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Primality certificates in other proof assistants</h2>
+      <ul>
+        <li>
+          <a href="https://github.com/thery/coqprime">Coqprime</a> proves primality in Coq from
+          Pocklington and elliptic curve certificates.
+        </li>
+        <li>
+          <a href="https://www.isa-afp.org/entries/Pratt_Certificate.html">Pratt's Primality
+          Certificates</a> in Isabelle's Archive of Formal Proofs proves primality from Pratt
+          certificates, using its entry on
+          <a href="https://www.isa-afp.org/entries/Lehmer.html">Lehmer's theorem</a>.
+        </li>
+      </ul>
+    </section>
+  </main>
+</body>
+</html>
