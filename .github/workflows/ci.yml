@@ -37,3 +37,30 @@ jobs:
           cd mathlib4
           lake exe cache get $(sed -n 's/^import //p' ../target/certificates.lean)
           lake env lean ../target/certificates.lean
+
+  page:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install wasm-pack
+        run: |
+          version=v0.15.1
+          sha256=410101009739b9d01c7d5affaaad6e9c9a24b4cba6791a4805db8e89b9bf7af2
+          name=wasm-pack-$version-x86_64-unknown-linux-musl
+          curl -sSfL -o wasm-pack.tar.gz \
+            "https://github.com/wasm-bindgen/wasm-pack/releases/download/$version/$name.tar.gz"
+          echo "$sha256  wasm-pack.tar.gz" | sha256sum -c
+          tar xzf wasm-pack.tar.gz --strip-components=1 -C "$HOME/.cargo/bin" "$name/wasm-pack"
+
+      - name: Build the page
+        run: scripts/build-web.sh
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist
+          if-no-files-found: error
