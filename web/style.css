@@ -47,6 +47,9 @@ html {
   background: var(--bg);
   color: var(--text);
   overflow-wrap: anywhere;
+  /* Keeps room for the scrollbar, so the text does not reflow when a certificate makes the page
+     scroll. */
+  scrollbar-gutter: stable;
 }
 
 /* The browsers' default focus ring is near black, which the dark scheme hides. */
@@ -71,7 +74,7 @@ html {
 body {
   margin: 0 auto;
   padding: 1rem;
-  max-width: 72rem;
+  max-width: 80rem;
 }
 
 h1 {
