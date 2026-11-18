@@ -1,59 +1,32 @@
-# Builds the page and copies it to the server. It needs three Actions secrets. DEPLOY_SSH_KEY is
-# a passphrase-free ed25519 private key made for this (`ssh-keygen -t ed25519 -N ''`), whose public
-# key is in the server's authorized_keys. DEPLOY_KNOWN_HOSTS is the output of `ssh-keyscan HOST`
-# for the host in DEPLOY_TARGET. DEPLOY_TARGET is `user@host:/path/to/folder`.
+# When CI passes on main, copies the page it built to the server. It needs three Actions secrets.
+# DEPLOY_SSH_KEY is a passphrase-free ed25519 private key made for this (`ssh-keygen -t ed25519
+# -N ''`), whose public key is in the server's authorized_keys. DEPLOY_KNOWN_HOSTS is the output of
+# `ssh-keyscan HOST` for the host in DEPLOY_TARGET. DEPLOY_TARGET is `user@host:/path/to/folder`.
 name: Deploy
 
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
-  workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
 
-# A deploy cancelled halfway would leave the site half copied, so a newer push waits instead.
-concurrency:
-  group: deploy
-  cancel-in-progress: false
-
 jobs:
-  build:
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Test
-        run: cargo test --locked
-
-      - name: Install wasm-pack
-        run: |
-          version=v0.15.1
-          sha256=410101009739b9d01c7d5affaaad6e9c9a24b4cba6791a4805db8e89b9bf7af2
-          name=wasm-pack-$version-x86_64-unknown-linux-musl
-          curl -sSfL -o wasm-pack.tar.gz \
-            "https://github.com/wasm-bindgen/wasm-pack/releases/download/$version/$name.tar.gz"
-          echo "$sha256  wasm-pack.tar.gz" | sha256sum -c
-          tar xzf wasm-pack.tar.gz --strip-components=1 -C "$HOME/.cargo/bin" "$name/wasm-pack"
-
-      - name: Build
-        run: scripts/build-web.sh
-
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: dist
-          path: dist
-          if-no-files-found: error
-          retention-days: 1
-
   deploy:
-    needs: build
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      (github.event.workflow_run.event == 'push' ||
+       github.event.workflow_run.event == 'workflow_dispatch') &&
+      github.event.workflow_run.head_sha == github.sha
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # A deploy cancelled halfway would leave the site half copied, so a newer deploy waits instead.
+    concurrency:
+      group: deploy
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -63,6 +36,8 @@ jobs:
         with:
           name: dist
           path: dist
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
 
       - name: Set up SSH
         env:
