@@ -17,7 +17,6 @@ for name in index.html credits.html style.css main.js worker.js gallery.json; do
   cp "web/$name" "$dist/"
 done
 cp web/pkg/*.js web/pkg/*.wasm "$dist/pkg/"
-cp LICENSE "$dist/"
 
 # The page's URLs of its own files end in `?v=dev`. In dist/ they carry a checksum of the files
 # instead, so that after a redeploy a browser fetches every file anew.
