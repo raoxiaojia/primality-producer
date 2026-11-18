@@ -92,7 +92,8 @@ function elementsById(ids) {
 }
 
 // Prefills the form from `?n=…&hints=…&workers=…` and selects the target of `?target=…` (an
-// unknown name gives way to the default once the targets are loaded).
+// unknown name gives way to the default once the targets are loaded). A link cannot raise the
+// worker count above the default.
 function applyUrlParams() {
   const params = new URLSearchParams(location.search);
   if (params.has('target')) {
@@ -105,7 +106,7 @@ function applyUrlParams() {
     ui.hints.value = params.get('hints');
   }
   if (params.has('workers')) {
-    ui.workers.value = clampWorkers(params.get('workers'));
+    ui.workers.value = Math.min(DEFAULT_WORKERS, clampWorkers(params.get('workers')));
   }
 }
 
